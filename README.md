@@ -51,7 +51,7 @@ python bot.py
 
 ## EN-US (English)
 
-**Matrix Polaris Gateway** is a privacy-focused, highly scalable open-source working title for a Geo-Fencing Gateway. It enables location-based, automated control of Matrix rooms designed for municipalities, public authorities, and the tourism sector within a nationwide federated citizen network [Matrix-based G2X communication („Neo“) - GitLab, Matrix Live Location Sharing Spec].
+**Matrix Polaris Gateway** is a privacy-focused, highly scalable Geo-Fencing Gateway. It enables location-based, automated control of Matrix rooms designed for municipalities, public authorities, and the tourism sector within a nationwide federated citizen network.
 
 Developed by **eZiner**.
 
