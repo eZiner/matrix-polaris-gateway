@@ -6,7 +6,7 @@
 
 ## DE-DE (German)
 
-**Matrix Polaris Gateway** ist ein datenschutzkonformer, hochgradig skalierbarer Open-Source-Arbeitstitel für ein Geo-Fencing-Gateway. Es ermöglicht die standortbasierte, automatisierte Steuerung von Matrix-Räumen für Kommunen, Behörden und den Tourismussektor im Rahmen eines bundesweiten, föderierten Bürgernetzes [Matrix-based G2X communication („Neo“) - GitLab, Matrix Live Location Sharing Spec].
+**Matrix Polaris Gateway** ist ein datenschutzkonformes, hochgradig skalierbares Geo-Fencing-Gateway. Es ermöglicht die standortbasierte, automatisierte Steuerung von Matrix-Räumen für Kommunen, Behörden und den Tourismussektor im Rahmen eines bundesweiten, föderierten Bürgernetzes.
 
 Developed by **eZiner** with 🐍 Python, `matrix-nio` and `shapely`.
 
