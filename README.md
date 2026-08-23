@@ -1,4 +1,4 @@
-# 🌌 Projekt POLARIS (matrix-polaris)
+# 🌌 POLARIS (matrix-polaris)
 
 [Auf Deutsch lesen](#de-de-german) | [Read in English](#en-us-english)
 
@@ -6,13 +6,13 @@
 
 ## DE-DE (German)
 
-Herzlich willkommen im zentralen Koordinations- und Konzept-Repository von **Projekt POLARIS** – der Initiative für ein freies, föderiertes und digital souveränes Kommunikationsnetzwerk der Kommunen und Universitäten in Deutschland [Matrix-based G2X communication („Neo“) - GitLab, Matrix Live Location Sharing Spec].
+Herzlich willkommen im zentralen Koordinations- und Konzept-Repository von **POLARIS** – der Initiative für ein freies, föderiertes und digital souveränes Kommunikationsnetzwerk der Kommunen und Universitäten in Deutschland [Matrix-based G2X communication („Neo“) - GitLab, Matrix Live Location Sharing Spec].
 
 🌐 **Zur offiziellen Projektseite:** [eZiner.github.io/matrix-polaris](https://github.io)
 
 ### 💡 Das große Ganze
 
-Projekt POLARIS bricht das Diktat teurer, proprietärer Schnittstellen und Software-Knebelverträge in der öffentlichen Verwaltung auf. Auf Basis des weltweit erprobten **Matrix-Protokolls** und staatlich geförderter Open-Source-Bausteine (wie *openDesk*) schaffen wir eine unkommerzielle digitale Infrastruktur [openDesk Portal, Matrix-based G2X communication („Neo“) - GitLab]. 
+POLARIS bricht das Diktat teurer, proprietärer Schnittstellen und Software-Knebelverträge in der öffentlichen Verwaltung auf. Auf Basis des weltweit erprobten **Matrix-Protokolls** und staatlich geförderter Open-Source-Bausteine (wie *openDesk*) schaffen wir eine unkommerzielle digitale Infrastruktur [openDesk Portal, Matrix-based G2X communication („Neo“) - GitLab]. 
 
 Das System bringt den Bürgerservice zurück auf Augenhöhe mit den Menschen – barrierefrei, ohne Smartphone-Zwang im Alltag und lebenslang kostenlos für jeden Bürger, getragen von Städten und Hochschulen.
 
@@ -61,4 +61,4 @@ This master concept coordinates decentralized, practical software implementation
 This project is licensed under the **MIT License**. Feel free to use, copy, and modify this concept for your own municipality or research project.
 
 ⚠️ **Rechtlicher Hinweis / Trademark Disclaimer:**  
-*Projekt POLARIS* ist ein von *eZiner* entwickeltes, rein unkommerzielles Open-Source-Infrastrukturprojekt zur Förderung der kommunalen und zivilgesellschaftlichen digitalen Souveränität. Der Name wird in seiner astronomischen Bedeutung (Polarstern) als freier Arbeitstitel verwendet. Es besteht keinerlei Verbindung zu bestehenden kommerziellen Marken, Unternehmen oder Softwareprodukten, die den Namen "Polaris" markenrechtlich nutzen. Alle filmischen oder literarischen Metaphern dienen ausschließlich der Veranschaulichung im Rahmen des wissenschaftlich-technischen Diskurses.
+*POLARIS* ist ein von *eZiner* entwickeltes, rein unkommerzielles Open-Source-Infrastrukturprojekt zur Förderung der kommunalen und zivilgesellschaftlichen digitalen Souveränität. Der Name wird in seiner astronomischen Bedeutung (Polarstern) als freier Arbeitstitel verwendet. Es besteht keinerlei Verbindung zu bestehenden kommerziellen Marken, Unternehmen oder Softwareprodukten, die den Namen "Polaris" markenrechtlich nutzen. Alle filmischen oder literarischen Metaphern dienen ausschließlich der Veranschaulichung im Rahmen des wissenschaftlich-technischen Diskurses.
