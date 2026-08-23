@@ -3,8 +3,8 @@ from nio import AsyncClient, RoomMessageText, MatrixRoom
 from shapely.geometry import Point, Polygon
 
 # --- CONFIGURATION ---
-MATRIX_HOMESERVER = "https://clausthal-zellerfeld.de"
-BOT_USER_ID = "@polaris-bot:clausthal-zellerfeld.de"
+MATRIX_HOMESERVER = "https://matrix.test-clz.de"
+BOT_USER_ID = "@polaris-bot:test-clz.de"
 BOT_PASSWORD = "IhrSicheresPasswort123!"
 
 # --- MULTI-ZONEN DEFINITION (Die "Landkarte" im Speicher) ---
