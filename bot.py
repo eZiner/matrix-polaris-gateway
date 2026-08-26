@@ -2,9 +2,9 @@ import asyncio
 import sqlite3
 from nio import AsyncClient, RoomMessageEncrypted
 from shapely.geometry import Point, Polygon
-import shapely.wkt  # Wird für das Einlesen von Polygonen aus PostgreSQL benötigt
+import shapely.wkt
 
-# Für PostgreSQL (wird nur importiert und genutzt, wenn Produktion aktiv ist)
+# Für PostgreSQL (wird im Produktivmodus genutzt)
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
@@ -12,9 +12,9 @@ except ImportError:
     psycopg2 = None
 
 # =====================================================================
-# 1. DER ARCHITEKTUR-SCHALTER (FEATURE TOGGLE)
+# 1. DER ARCHITEKTUR-SCHALTER & CONFIG
 # =====================================================================
-PROTOTYPING_MODE = True  # Setze auf False für den PostgreSQL-Produktivbetrieb!
+PROTOTYPING_MODE = True  # Setze auf False für echten PostGIS-Betrieb!
 
 # Matrix Zugangsdaten
 MATRIX_HOMESERVER = "https://matrix.org"
@@ -22,7 +22,7 @@ BOT_USERNAME = "@dein_bot_name:matrix.org"
 BOT_PASSWORD = "DeinSicheresPasswort"
 GATEWAY_ROOM_ID = "!gateway_raum_id:matrix.org"
 
-# Prototyping-Daten (Werden nur genutzt, wenn PROTOTYPING_MODE = True)
+# Prototyping-Daten (SQLite + Shapely)
 LOCAL_DB_FILE = "geofence_status.db"
 LOCAL_REGIONEN = {
     "Goslar_Altstadt": {
@@ -31,7 +31,7 @@ LOCAL_REGIONEN = {
     }
 }
 
-# PostgreSQL-Konfiguration (Wird nur genutzt, wenn PROTOTYPING_MODE = False)
+# PostgreSQL / PostGIS Konfiguration
 POSTGRES_CONFIG = {
     "dbname": "polaris_gateway",
     "user": "postgres",
@@ -41,10 +41,10 @@ POSTGRES_CONFIG = {
 }
 
 # =====================================================================
-# 2. ABSTRAKTIONS-SCHICHT FÜR DATENBANKEN
+# 2. DATENBANK INITIALISIERUNG
 # =====================================================================
 def init_storage():
-    """Initialisiert die Datenbanken je nach Modus."""
+    """Initialisiert die Tabellen je nach Modus."""
     if PROTOTYPING_MODE:
         conn = sqlite3.connect(LOCAL_DB_FILE)
         cursor = conn.cursor()
@@ -56,52 +56,51 @@ def init_storage():
         """)
         conn.commit()
         conn.close()
-        print("📁 Speicher: Lokale SQLite-Datenbank initialisiert (Prototyping).")
+        print("📁 Speicher: Lokale SQLite-Datenbank aktiv.")
     else:
         if not psycopg2:
-            raise ImportError("psycopg2 fehlt! Installiere es mit: pip install psycopg2")
+            raise ImportError("psycopg2 fehlt! Installiere es mit: pip install psycopg2-binary")
         conn = psycopg2.connect(**POSTGRES_CONFIG)
         cursor = conn.cursor()
-        # Erstellt Tabellen für Regionen und Status in PostgreSQL
+        # PostGIS-Tabelle mit echtem GEOMETRY-Typ
         cursor.execute("""
+            CREATE EXTENSION IF NOT EXISTS postgis;
             CREATE TABLE IF NOT EXISTS regions (
-                name TEXT PRIMARY KEY,
-                room_id TEXT NOT EXISTS,
-                geometry_wkt TEXT -- Speichert das Polygon als Klartext-String (WKT)
+                name VARCHAR(100) PRIMARY KEY,
+                room_id VARCHAR(255) NOT NULL,
+                geom GEOMETRY(Polygon, 4326) NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS regions_geom_idx ON regions USING gist(geom);
             CREATE TABLE IF NOT EXISTS user_status (
-                user_id TEXT, region_name TEXT, is_inside BOOLEAN,
+                user_id VARCHAR(255),
+                region_name VARCHAR(100) REFERENCES regions(name) ON DELETE CASCADE,
+                is_inside BOOLEAN NOT NULL DEFAULT FALSE,
                 PRIMARY KEY (user_id, region_name)
             );
         """)
         conn.commit()
         cursor.close()
         conn.close()
-        print("🐘 Speicher: Zentrale PostgreSQL-Datenbank initialisiert (Produktion).")
+        print("🐘 Speicher: Echte PostgreSQL/PostGIS-Datenbank aktiv.")
 
-def load_regions_from_db():
-    """Lädt die Regionen dynamisch. Im Prod-Modus direkt aus PostgreSQL."""
+# =====================================================================
+# 3. STATISCHE & METADATEN-ABFRAGEN
+# =====================================================================
+def load_all_regions_metadata():
+    """Lädt eine einfache Liste aller Region-Namen und Raum-IDs für den Abgleich."""
     if PROTOTYPING_MODE:
-        return LOCAL_REGIONEN
+        return {name: d["room_id"] for name, d in LOCAL_REGIONEN.items()}
     
-    # Produktiv-Modus: Aus PostgreSQL laden
     conn = psycopg2.connect(**POSTGRES_CONFIG)
     cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT name, room_id, geometry_wkt FROM regions")
+    cursor.execute("SELECT name, room_id FROM regions")
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
-    
-    prod_regionen = {}
-    for row in rows:
-        prod_regionen[row["name"]] = {
-            "polygon": shapely.wkt.loads(row["geometry_wkt"]), # Konvertiert Text zurück in Shapely-Objekt
-            "room_id": row["room_id"]
-        }
-    return prod_regionen
+    return {row["name"]: row["room_id"] for row in rows}
 
 def get_last_status(user_id, region_name):
-    """Liest den letzten Zustand aus der jeweils aktiven Datenbank."""
+    """Holt den letzten Zustand des Nutzers (True = Drinnen, False = Draußen)."""
     if PROTOTYPING_MODE:
         conn = sqlite3.connect(LOCAL_DB_FILE)
         cursor = conn.cursor()
@@ -119,7 +118,7 @@ def get_last_status(user_id, region_name):
         return row[0] if row else False
 
 def update_status(user_id, region_name, is_inside):
-    """Speichert den Zustand in der jeweils aktiven Datenbank."""
+    """Speichert den aktuellen Zustand des Nutzers ab."""
     if PROTOTYPING_MODE:
         conn = sqlite3.connect(LOCAL_DB_FILE)
         cursor = conn.cursor()
@@ -141,7 +140,32 @@ def update_status(user_id, region_name, is_inside):
         conn.close()
 
 # =====================================================================
-# 3. GEOFENCE LOGIK & EVENT HANDLER (Bleibt für beide Modi identisch!)
+# 4. GEOFENCE CORE-LOGIK
+# =====================================================================
+def check_user_location_db(latitude, longitude):
+    """
+    Ermittelt, in welchen Regionen der Punkt liegt.
+    Nutzt im Prod-Modus das hochperformante ST_Contains von PostGIS.
+    """
+    if PROTOTYPING_MODE:
+        user_point = Point(longitude, latitude)
+        return [name for name, d in LOCAL_REGIONEN.items() if d["polygon"].contains(user_point)]
+    
+    # PRODUKTIVBETRIEB: PostGIS-Abfrage (In welchen Polygonen liegt der Punkt?)
+    conn = psycopg2.connect(**POSTGRES_CONFIG)
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    sql = """
+        SELECT name FROM regions 
+        WHERE ST_Contains(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326));
+    """
+    cursor.execute(sql, (longitude, latitude))
+    treffer = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return [row["name"] for row in treffer]
+
+# =====================================================================
+# 5. MATRIX EVENT HANDLER
 # =====================================================================
 async def message_callback(room, event):
     if room.room_id != GATEWAY_ROOM_ID:
@@ -151,46 +175,47 @@ async def message_callback(room, event):
         if hasattr(event, "source") and "content" in event.source:
             content = event.source["content"]
             if "geo_uri" in content:
-                geo_data = content["geo_uri"].replace("geo:", "").split(";")
+                # Extrahiere GPS aus "geo:51.912,10.425"
+                geo_data = content["geo_uri"].replace("geo:", "").split(";")[0]
                 lat, lon = map(float, geo_data.split(","))
                 user_id = event.sender
                 
-                user_point = Point(lon, lat)
+                # 1. Datenbank nach Treffern fragen (PostGIS optimiert!)
+                aktive_regionen = check_user_location_db(lat, lon)
                 
-                # Regionen werden dynamisch geladen (lokal oder aus Postgres)
-                aktuelle_regionen = load_regions_from_db()
+                # 2. Alle existierenden Regionen durchgehen für den Statusabgleich
+                alle_regionen = load_all_regions_metadata()
                 
-                for region_name, daten in aktuelle_regionen.items():
-                    regional_room = daten["room_id"]
-                    is_inside = daten["polygon"].contains(user_point)
+                for region_name, room_id in alle_regionen.items():
+                    is_inside = region_name in aktive_regionen
                     was_inside = get_last_status(user_id, region_name)
                     
                     if is_inside and not was_inside:
                         print(f"🎯 {user_id} -> {region_name} (Betreten). Sende Invite...")
-                        await client.room_invite(regional_room, user_id)
+                        await client.room_invite(room_id, user_id)
                         update_status(user_id, region_name, True)
                         
                     elif not is_inside and was_inside:
                         print(f"🚷 {user_id} -> {region_name} (Verlassen). Sende Kick...")
-                        await client.room_kick(regional_room, user_id, reason="Zone verlassen.")
+                        await client.room_kick(room_id, user_id, reason="Zone verlassen.")
                         update_status(user_id, region_name, False)
                         
     except Exception as e:
         print(f"Fehler im Event-Handler: {e}")
 
 # =====================================================================
-# 4. BOT INITIATION
+# 6. ENGINE START
 # =====================================================================
 async def main():
     global client
-    init_storage()  # Wählt automatisch das richtige DB-System
+    init_storage()
     
     client = AsyncClient(MATRIX_HOMESERVER, BOT_USERNAME)
     client.add_event_handler(RoomMessageEncrypted, message_callback)
     
     modus = "PROTOTYPING" if PROTOTYPING_MODE else "PRODUKTIONS"
     print(f"Bot startet im {modus}-Modus...")
-
+    
     await client.login(BOT_PASSWORD)
     await client.sync_forever(timeout=30000, full_state=True)
 
