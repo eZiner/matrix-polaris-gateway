@@ -1,135 +1,198 @@
 import asyncio
-import time  # NEU: Für zeitbasierte Hysterese
-from nio import AsyncClient, RoomMessageText, MatrixRoom
+import sqlite3
+from nio import AsyncClient, RoomMessageEncrypted
 from shapely.geometry import Point, Polygon
+import shapely.wkt  # Wird für das Einlesen von Polygonen aus PostgreSQL benötigt
 
-# --- CONFIGURATION ---
-MATRIX_HOMESERVER = "https://clausthal-zellerfeld.de"
-BOT_USER_ID = "@polaris-bot:clausthal-zellerfeld.de"
-BOT_PASSWORD = "IhrSicheresPasswort123!"
+# Für PostgreSQL (wird nur importiert und genutzt, wenn Produktion aktiv ist)
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except ImportError:
+    psycopg2 = None
 
-# Pufferzeit in Sekunden: Wie lange warten wir nach einem Exit, bevor wir wirklich kicken?
-# Für Tests auf 30 Sekunden gestellt (Im Echtbetrieb: 600 für 10 Minuten)
-EXIT_COOLDOWN_TIME = 30 
+# =====================================================================
+# 1. DER ARCHITEKTUR-SCHALTER (FEATURE TOGGLE)
+# =====================================================================
+PROTOTYPING_MODE = True  # Setze auf False für den PostgreSQL-Produktivbetrieb!
 
-ZONEN_REGISTER = {
-    "Clausthal-Zellerfeld": {
-        "room_id": "!clz-info12345:matrix.org",
-        "polygon": Polygon([
-            (10.3100, 51.8000), (10.3600, 51.8000),
-            (10.3600, 51.8300), (10.3100, 51.8300),
-            (10.3100, 51.8000)
-        ])
-    },
-    "Goslar": {
-        "room_id": "!goslar-info67890:matrix.org",
-        "polygon": Polygon([
-            (10.4000, 51.8900), (10.4500, 51.8900),
-            (10.4500, 51.9200), (10.4000, 51.9200),
-            (10.4000, 51.8900)
-        ])
+# Matrix Zugangsdaten
+MATRIX_HOMESERVER = "https://matrix.org"
+BOT_USERNAME = "@dein_bot_name:matrix.org"
+BOT_PASSWORD = "DeinSicheresPasswort"
+GATEWAY_ROOM_ID = "!gateway_raum_id:matrix.org"
+
+# Prototyping-Daten (Werden nur genutzt, wenn PROTOTYPING_MODE = True)
+LOCAL_DB_FILE = "geofence_status.db"
+LOCAL_REGIONEN = {
+    "Goslar_Altstadt": {
+        "polygon": Polygon([(10.420, 51.902), (10.435, 51.902), (10.435, 51.910), (10.420, 51.910)]),
+        "room_id": "!goslar_raum_id:matrix.org"
     }
 }
 
-# --- TRACKING STORAGE ---
-ACTIVE_USER_SUBSCRIPTIONS = {} # Wer ist im Raum aktiv
-EXIT_PENDING_USERS = {}        # NEU: Warteliste für den Kick { "@user": { "!raum_id": timestamp_des_exits } }
+# PostgreSQL-Konfiguration (Wird nur genutzt, wenn PROTOTYPING_MODE = False)
+POSTGRES_CONFIG = {
+    "dbname": "polaris_gateway",
+    "user": "postgres",
+    "password": "DeinDbPasswort",
+    "host": "localhost",
+    "port": 5432
+}
 
-async def process_geo_position(sender: str, lat: float, lon: float, trigger_room_id: str) -> None:
-    buerger_punkt = Point(lon, lat)
-    current_time = time.time()
+# =====================================================================
+# 2. ABSTRAKTIONS-SCHICHT FÜR DATENBANKEN
+# =====================================================================
+def init_storage():
+    """Initialisiert die Datenbanken je nach Modus."""
+    if PROTOTYPING_MODE:
+        conn = sqlite3.connect(LOCAL_DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_status (
+                user_id TEXT, region_name TEXT, is_inside INTEGER,
+                PRIMARY KEY (user_id, region_name)
+            )
+        """)
+        conn.commit()
+        conn.close()
+        print("📁 Speicher: Lokale SQLite-Datenbank initialisiert (Prototyping).")
+    else:
+        if not psycopg2:
+            raise ImportError("psycopg2 fehlt! Installiere es mit: pip install psycopg2")
+        conn = psycopg2.connect(**POSTGRES_CONFIG)
+        cursor = conn.cursor()
+        # Erstellt Tabellen für Regionen und Status in PostgreSQL
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS regions (
+                name TEXT PRIMARY KEY,
+                room_id TEXT NOT EXISTS,
+                geometry_wkt TEXT -- Speichert das Polygon als Klartext-String (WKT)
+            );
+            CREATE TABLE IF NOT EXISTS user_status (
+                user_id TEXT, region_name TEXT, is_inside BOOLEAN,
+                PRIMARY KEY (user_id, region_name)
+            );
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("🐘 Speicher: Zentrale PostgreSQL-Datenbank initialisiert (Produktion).")
+
+def load_regions_from_db():
+    """Lädt die Regionen dynamisch. Im Prod-Modus direkt aus PostgreSQL."""
+    if PROTOTYPING_MODE:
+        return LOCAL_REGIONEN
     
-    if sender not in ACTIVE_USER_SUBSCRIPTIONS:
-        ACTIVE_USER_SUBSCRIPTIONS[sender] = set()
-    if sender not in EXIT_PENDING_USERS:
-        EXIT_PENDING_USERS[sender] = {}
+    # Produktiv-Modus: Aus PostgreSQL laden
+    conn = psycopg2.connect(**POSTGRES_CONFIG)
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT name, room_id, geometry_wkt FROM regions")
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    prod_regionen = {}
+    for row in rows:
+        prod_regionen[row["name"]] = {
+            "polygon": shapely.wkt.loads(row["geometry_wkt"]), # Konvertiert Text zurück in Shapely-Objekt
+            "room_id": row["room_id"]
+        }
+    return prod_regionen
 
-    aktuelle_treffer_raeume = set()
+def get_last_status(user_id, region_name):
+    """Liest den letzten Zustand aus der jeweils aktiven Datenbank."""
+    if PROTOTYPING_MODE:
+        conn = sqlite3.connect(LOCAL_DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT is_inside FROM user_status WHERE user_id = ? AND region_name = ?", (user_id, region_name))
+        row = cursor.fetchone()
+        conn.close()
+        return bool(row[0]) if row else False
+    else:
+        conn = psycopg2.connect(**POSTGRES_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("SELECT is_inside FROM user_status WHERE user_id = %s AND region_name = %s", (user_id, region_name))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return row[0] if row else False
 
-    # 1. ENTER-SCHLEIFE & RETTUNG AUS COOLDOWN
-    for zonen_name, zonen_daten in ZONEN_REGISTER.items():
-        ziel_raum = zonen_daten["room_id"]
-        
-        if zonen_daten["polygon"].contains(buerger_punkt):
-            aktuelle_treffer_raeume.add(ziel_raum)
-            
-            # Fall A: Nutzer war im Cooldown für diesen Raum (Signal sprang kurz raus und wieder rein)
-            if ziel_raum in EXIT_PENDING_USERS[sender]:
-                del EXIT_PENDING_USERS[sender][ziel_raum]
-                print(f"[PING-PONG SCHUTZ] {sender} ist rechtzeitig in die Zone '{zonen_name}' zurückgekehrt. Kick abgebrochen.")
-            
-            # Fall B: Echter Neueintritt
-            elif ziel_raum not in ACTIVE_USER_SUBSCRIPTIONS[sender]:
-                print(f"--> [ENTER] {sender} hat die Zone '{zonen_name}' betreten.")
-                await client.room_send(
-                    room_id=trigger_room_id,
-                    message_type="m.room.message",
-                    content={"msgtype": "m.text", "body": f"POLARIS-Update: Willkommen in {zonen_name}! Du wurdest zum Infokanal eingeladen."}
-                )
-                await client.room_invite(room_id=ziel_raum, user_id=sender)
-                ACTIVE_USER_SUBSCRIPTIONS[sender].add(ziel_raum)
+def update_status(user_id, region_name, is_inside):
+    """Speichert den Zustand in der jeweils aktiven Datenbank."""
+    if PROTOTYPING_MODE:
+        conn = sqlite3.connect(LOCAL_DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO user_status (user_id, region_name, is_inside) VALUES (?, ?, ?)
+            ON CONFLICT(user_id, region_name) DO UPDATE SET is_inside = excluded.is_inside
+        """, (user_id, region_name, int(is_inside)))
+        conn.commit()
+        conn.close()
+    else:
+        conn = psycopg2.connect(**POSTGRES_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO user_status (user_id, region_name, is_inside) VALUES (%s, %s, %s)
+            ON CONFLICT(user_id, region_name) DO UPDATE SET is_inside = EXCLUDED.is_inside
+        """, (user_id, region_name, is_inside))
+        conn.commit()
+        cursor.close()
+        conn.close()
 
-    # 2. EXIT-SCHLEIFE: Auf die Warteliste setzen statt direkt kicken
-    for aktiver_raum in list(ACTIVE_USER_SUBSCRIPTIONS[sender]):
-        if aktiver_raum not in aktuelle_treffer_raeume and aktiver_raum not in EXIT_PENDING_USERS[sender]:
-            # Wir kicken noch nicht, wir merken uns nur den Zeitpunkt des Verlassens
-            EXIT_PENDING_USERS[sender][aktiver_raum] = current_time
-            zonen_name = [name for name, d in ZONEN_REGISTER.items() if d["room_id"] == aktiver_raum][0]
-            print(f"[COOLDOWN START] {sender} hat die Zone '{zonen_name}' verlassen. Pufferzeit läuft...")
+# =====================================================================
+# 3. GEOFENCE LOGIK & EVENT HANDLER (Bleibt für beide Modi identisch!)
+# =====================================================================
+async def message_callback(room, event):
+    if room.room_id != GATEWAY_ROOM_ID:
+        return
 
-# --- NEU: HINTERGRUND-TASK FÜR DIE KICK-BEREINIGUNG ---
-async def cooldown_cleanup_loop():
-    """Prüft jede Sekunde, ob die Pufferzeit von Nutzern auf der Warteliste abgelaufen ist."""
-    while True:
-        current_time = time.time()
-        for user_id, raeume in list(EXIT_PENDING_USERS.items()):
-            for raum_id, exit_timestamp in list(raeume.items()):
-                # Wenn die Cooldown-Zeit abgelaufen ist, wird der Kick final ausgeführt
-                if current_time - exit_timestamp >= EXIT_COOLDOWN_TIME:
-                    zonen_name = [name for name, d in ZONEN_REGISTER.items() if d["room_id"] == raum_id][0]
-                    print(f"--> [FINAL EXIT] Puffer abgelaufen. Kicke {user_id} aus '{zonen_name}'.")
+    try:
+        if hasattr(event, "source") and "content" in event.source:
+            content = event.source["content"]
+            if "geo_uri" in content:
+                geo_data = content["geo_uri"].replace("geo:", "").split(";")
+                lat, lon = map(float, geo_data.split(","))
+                user_id = event.sender
+                
+                user_point = Point(lon, lat)
+                
+                # Regionen werden dynamisch geladen (lokal oder aus Postgres)
+                aktuelle_regionen = load_regions_from_db()
+                
+                for region_name, daten in aktuelle_regionen.items():
+                    regional_room = daten["room_id"]
+                    is_inside = daten["polygon"].contains(user_point)
+                    was_inside = get_last_status(user_id, region_name)
                     
-                    try:
-                        # Kick auf dem Server ausführen
-                        await client.room_kick(room_id=raum_id, user_id=user_id, reason="POLARIS: Geofence dauerhaft verlassen.")
-                        # Aus internem Zustand löschen
-                        ACTIVE_USER_SUBSCRIPTIONS[user_id].remove(raum_id)
-                        del EXIT_PENDING_USERS[user_id][raum_id]
-                    except Exception as e:
-                        print(f"Fehler beim Ausführen des finalen Kicks: {e}")
+                    if is_inside and not was_inside:
+                        print(f"🎯 {user_id} -> {region_name} (Betreten). Sende Invite...")
+                        await client.room_invite(regional_room, user_id)
+                        update_status(user_id, region_name, True)
                         
-        await asyncio.sleep(1) # Schleife schläft für 1 Sekunde zur CPU-Schonung
+                    elif not is_inside and was_inside:
+                        print(f"🚷 {user_id} -> {region_name} (Verlassen). Sende Kick...")
+                        await client.room_kick(regional_room, user_id, reason="Zone verlassen.")
+                        update_status(user_id, region_name, False)
+                        
+    except Exception as e:
+        print(f"Fehler im Event-Handler: {e}")
 
-async def custom_event_callback(room: MatrixRoom, event: any) -> None:
-    sender = event.sender
-    source_type = event.source.get('type')
-    content = event.source.get('content', {})
-
-    if (source_type == "m.room.message" and content.get('msgtype') == 'm.location') or \
-       (source_type in ["org.matrix.m.beacon", "m.beacon"]):
-        try:
-            location_entry = content.get('org.matrix.m.location', content.get('m.location', {}))
-            geo_uri = content.get('geo_uri') or location_entry.get('geo_uri')
-            coords = geo_uri.split(":")[1].split(";")[0].split(",")
-            lat, lon = map(float, coords)
-            
-            await process_geo_position(sender, lat, lon, room.room_id)
-        except Exception as e:
-            print(f"Fehler bei Geo-Verarbeitung: {e}")
-
+# =====================================================================
+# 4. BOT INITIATION
+# =====================================================================
 async def main():
     global client
-    client = AsyncClient(MATRIX_HOMESERVER, BOT_USER_ID)
-    client.add_event_handler(custom_event_callback, "*")
+    init_storage()  # Wählt automatisch das richtige DB-System
     
-    print("Projekt POLARIS - Multi-Zonen-Gateway inklusive Ping-Pong-Schutz startet...")
+    client = AsyncClient(MATRIX_HOMESERVER, BOT_USERNAME)
+    client.add_event_handler(RoomMessageEncrypted, message_callback)
+    
+    modus = "PROTOTYPING" if PROTOTYPING_MODE else "PRODUKTIONS"
+    print(f"Bot startet im {modus}-Modus...")
+
     await client.login(BOT_PASSWORD)
-    
-    # NEU: Wir starten die Reinigungs-Schleife als asynchronen Hintergrund-Task parallel zum Matrix-Sync
-    asyncio.create_task(cooldown_cleanup_loop())
-    
-    print("System aktiv. Bereit für Tests mit intelligentem Hysterese-Puffer!")
-    await client.sync_forever(timeout=30000)
+    await client.sync_forever(timeout=30000, full_state=True)
 
 if __name__ == "__main__":
     asyncio.run(main())
