@@ -28,6 +28,11 @@ Benannt nach dem Polarstern, der Seefahrern seit Jahrtausenden als fester, unver
 
 #### 🛠️ Installation & Setup (DE)
 
+> 
+> **Experimenteller Prototyp – Nicht für den produktiven Einsatz geeignet!**
+> 
+> Der in diesem Repository bereitgestellte Quellcode (inklusive der `bot.py`) ist ein rein experimentelles Proof-of-Concept (PoC). Die aktuelle Architektur basiert auf Prototyping-Strukturen und erfüllt nicht die Performance-, Skalierungs- und Sicherheitsanforderungen für einen kritischen Produktivbetrieb.
+
 ##### Abhängigkeiten installieren
 ```bash
 pip install matrix-nio shapely
