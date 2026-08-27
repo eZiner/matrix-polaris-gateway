@@ -78,6 +78,11 @@ Named after the North Star (Polaris), which has served navigators for millennia 
 
 #### 🛠️ Installation & Setup (EN)
 
+> [!CAUTION]
+> **Experimental Prototype – Not Suitable for Production Use!**
+> 
+> The source code provided in this repository (including `bot.py`) is a purely experimental Proof-of-Concept (PoC). The current architecture relies on basic prototyping structures and does not meet the performance, scalability, or security requirements necessary for a critical production environment.
+
 ##### Install dependencies
 ```bash
 pip install matrix-nio shapely
