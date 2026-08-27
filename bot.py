@@ -24,10 +24,57 @@ GATEWAY_ROOM_ID = "!gateway_raum_id:matrix.org"
 
 # Prototyping-Daten (SQLite + Shapely)
 LOCAL_DB_FILE = "geofence_status.db"
+
+#LOCAL_REGIONEN = {
+#    "Goslar_Altstadt": {
+#        "polygon": Polygon([(10.420, 51.902), (10.435, 51.902), (10.435, 51.910), (10.420, 51.910)]),
+#        "room_id": "!goslar_raum_id:matrix.org"
+#    }
+#}
+
+# =====================================================================
+# DICTIONARY-STRUKTUR FÜR DIE REGION OBERHARZ (WILDEMANN)
+# =====================================================================
 LOCAL_REGIONEN = {
-    "Goslar_Altstadt": {
-        "polygon": Polygon([(10.420, 51.902), (10.435, 51.902), (10.435, 51.910), (10.420, 51.910)]),
-        "room_id": "!goslar_raum_id:matrix.org"
+    "Wildemann_Ortskern": {
+        "polygon": Polygon([
+            (10.275, 51.820),  # Süd-West-Ecke (Längengrad, Breitengrad)
+            (10.292, 51.820),  # Süd-Ost-Ecke
+            (10.292, 51.838),  # Nord-Ost-Ecke (reicht hoch Richtung Hüttenberg)
+            (10.275, 51.838),  # Nord-West-Ecke
+            (10.275, 51.820)   # Schließt das Polygon
+        ]),
+        "room_id": "!wildemann_zentrum:matrix.org"
+    },
+    "Lautenthal_Nord": {
+        "polygon": Polygon([
+            (10.278, 51.860), 
+            (10.298, 51.860), 
+            (10.298, 51.875), 
+            (10.278, 51.875),
+            (10.278, 51.860)
+        ]),
+        "room_id": "!lautenthal_info:matrix.org"
+    },
+    "Clausthal_Zellerfeld": {
+        "polygon": Polygon([
+            (10.310, 51.795), 
+            (10.355, 51.795), 
+            (10.355, 51.820), 
+            (10.310, 51.820),
+            (10.310, 51.795)
+        ]),
+        "room_id": "!clausthal_zellerfeld_uni:matrix.org"
+    },
+    "Bad_Grund_Bergstadt": {
+        "polygon": Polygon([
+            (10.220, 51.802), 
+            (10.250, 51.802), 
+            (10.250, 51.818), 
+            (10.220, 51.818),
+            (10.220, 51.802)
+        ]),
+        "room_id": "!bad_grund_bergstadt:matrix.org"
     }
 }
 
