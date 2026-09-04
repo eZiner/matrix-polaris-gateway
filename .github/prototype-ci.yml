@@ -1,0 +1,41 @@
+name: POLARIS Python Prototype CI
+
+on:
+  push:
+    paths:
+      - 'prototype/**'
+      - '.github/workflows/prototype-ci.yml'
+  pull_request:
+    paths:
+      - 'prototype/**'
+
+jobs:
+  test-prototype:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Quellcode auschecken
+      uses: actions/checkout@v4
+
+    - name: Python initialisieren
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: System-Abhängigkeiten installieren
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libolm-dev build-essential
+
+    - name: Python-Abhängigkeiten installieren
+      run: |
+        cd prototype/
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install flake8
+
+    - name: Syntax-Prüfung (Linter)
+      run: |
+        # Stop bei Syntax-Fehlern oder ungelösten Importen
+        flake8 prototype/ --count --select=E9,F63,F7,F82 --show-source --statistics
