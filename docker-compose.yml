@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # --- SOUVERÄNE DATENBANK-SCHICHT ---
+  polaris-db:
+    image: postgis/postgis:15-3.3-slim
+    container_name: polaris-postgis-db
+    environment:
+      POSTGRES_DB: polaris_geo
+      POSTGRES_USER: polaris
+      # Docker-Compose holt sich das Passwort auf dem Server später aus der dortigen .env!
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      # Persistente Speicherung der OSM-Geometrien auf deiner Festplatte
+      - polaris_db_data:/var/lib/postgresql/data
+      # Spiegelt das Datenbankschema, damit es beim ersten Start automatisch initialisiert wird
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polaris -d polaris_geo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- PROTOTYPING-SCHICHT (PYTHON BOT) ---
+  polaris-bot-proto:
+    build:
+      context: ./prototype
+      dockerfile: Dockerfile.dev
+    container_name: polaris-prototype-bot
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Der Bot wartet im Docker-Netzwerk, bis die PostGIS-Datenbank voll einsatzbereit ist
+    depends_on:
+      polaris-db:
+        condition: service_healthy
+    volumes:
+      # Live-Code-Mount: Jede Änderung an deiner bot.py im prototype/-Ordner 
+      # ist nach einem Container-Neustart sofort ohne Neu-Bauen aktiv!
+      - ./prototype:/app
+    restart: unless-stopped
+
+volumes:
+  polaris_db_data:

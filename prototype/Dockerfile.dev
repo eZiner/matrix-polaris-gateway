@@ -1,0 +1,24 @@
+# Nutzen der offiziellen, schlanken Python-Laufzeitumgebung
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System-Abhängigkeiten für Verschlüsselung (libolm) und PostGIS-Treiber installieren
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libolm-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Erst die requirements kopieren, um den Docker-Layer-Cache optimal zu nutzen
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Den restlichen Prototyp-Quellcode (bot.py) kopieren
+COPY . .
+
+# Umgebungsvariable setzen, damit Python-Logs sofort ungemanagt auf dem Terminal erscheinen
+ENV PYTHONUNBUFFERED=1
+
+# Startbefehl für den Prototyp
+CMD ["python", "bot.py"]

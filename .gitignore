@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Rust-Build-Ordner ignorieren (sehr wichtig, sonst lädst du Gigabyte an temporären Daten hoch!)
+production/target/
+**/*.rs.bk
+
+# SQLx-Cache (nur hochladen, wenn du den Offline-Modus erzwingst)
+.sqlx/

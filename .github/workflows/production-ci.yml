@@ -1,0 +1,52 @@
+name: POLARIS Rust Production CI
+
+on:
+  push:
+    paths:
+      - 'production/**'
+      - '.github/workflows/production-ci.yml'
+  pull_request:
+    paths:
+      - 'production/**'
+
+jobs:
+  build-production:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Quellcode auschecken
+      uses: actions/checkout@v4
+
+    - name: Rust Toolchain initialisieren
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+
+    - name: Rust Cache aktivieren
+      uses: swatinem/rust-cache@v2
+      with:
+        workspaces: "production -> target"
+
+    - name: System-Abhängigkeiten installieren
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libssl-dev
+
+    - name: Code-Formatierung prüfen
+      run: |
+        cd production/
+        cargo fmt --check
+
+    - name: Kompilierung im SQLx-Offline-Modus prüfen
+      env:
+        SQLX_OFFLINE: true
+      run: |
+        cd production/
+        cargo check --release
+
+    - name: Sicherheits- und Qualitätsprüfung (Clippy)
+      env:
+        SQLX_OFFLINE: true
+      run: |
+        cd production/
+        cargo clippy -- -D warnings
