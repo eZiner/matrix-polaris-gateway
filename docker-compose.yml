@@ -1,46 +1,31 @@
 version: '3.8'
 
 services:
-  # --- SOUVERÄNE DATENBANK-SCHICHT ---
+  # 🌐 POSTGIS-DATENBANK-DIENST
   polaris-db:
-    image: postgis/postgis:15-3.3-slim
-    container_name: polaris-postgis-db
+    # Wir nutzen das offizielle, hochoptimierte PostGIS-Image (Postgres 16 + PostGIS 3.4)
+    image: postgis/postgis:16-3.4
+    container_name: polaris-postgis-gateway
+    restart: always
     environment:
-      POSTGRES_DB: polaris_geo
-      POSTGRES_USER: polaris
-      # Docker-Compose holt sich das Passwort auf dem Server später aus der dortigen .env!
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Diese Variablen greifen beim allerersten Start und erzeugen deine Struktur
+      - POSTGRES_USER=polaris
+      - POSTGRES_PASSWORD=vG0YEhWplJql2boa1usU # Entspricht deiner heutigen lokalen .env
+      - POSTGRES_DB=polaris_geo # Exakt der Name aus deiner produktiven Konfiguration!
     ports:
+      # Spiegelt den Postgres-Standardport nach außen auf deinen Localhost
       - "5432:5432"
     volumes:
-      # Persistente Speicherung der OSM-Geometrien auf deiner Festplatte
-      - polaris_db_data:/var/lib/postgresql/data
-      # Spiegelt das Datenbankschema, damit es beim ersten Start automatisch initialisiert wird
-      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
-    restart: unless-stopped
+      # Sichert die Geometrie-Daten dauerhaft auf deiner Festplatte (überlebt Container-Restarts)
+      - polaris_postgres_data:/var/lib/postgresql/data
     healthcheck:
+      # Sichert ab, dass das geplante Rust-Gateway erst startet, wenn PostGIS bereit ist
       test: ["CMD-SHELL", "pg_isready -U polaris -d polaris_geo"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # --- PROTOTYPING-SCHICHT (PYTHON BOT) ---
-  polaris-bot-proto:
-    build:
-      context: ./prototype
-      dockerfile: Dockerfile.dev
-    container_name: polaris-prototype-bot
-    environment:
-      - PYTHONUNBUFFERED=1
-      # Der Bot wartet im Docker-Netzwerk, bis die PostGIS-Datenbank voll einsatzbereit ist
-    depends_on:
-      polaris-db:
-        condition: service_healthy
-    volumes:
-      # Live-Code-Mount: Jede Änderung an deiner bot.py im prototype/-Ordner 
-      # ist nach einem Container-Neustart sofort ohne Neu-Bauen aktiv!
-      - ./prototype:/app
-    restart: unless-stopped
-
 volumes:
-  polaris_db_data:
+  # Das persistente Docker-Volume für deine BKG- und OSM-Geometrien
+  polaris_postgres_data:
+    driver: local
