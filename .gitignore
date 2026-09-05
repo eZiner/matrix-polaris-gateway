@@ -223,3 +223,19 @@ production/target/
 
 # SQLx-Cache (nur hochladen, wenn du den Offline-Modus erzwingst)
 .sqlx/
+
+# Geodaten und Datenbank-Ballast ignorieren (VG25)
+*.gpkg
+*.gdb
+*.shp
+database/vg25_utm32/
+database/*.gpkg
+
+# Python-Cache-Müll
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Lokales Code-Archiv ausschließen
+obsolete/
+database/obsolete/
