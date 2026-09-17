@@ -1,9 +1,30 @@
-# import_one_osm_subzone.py (URGESTEIN-EDITION MIT POLYGON + NODE-BUFFER - Speicherort: /database)
 import os
 import sys
+import time                     
 import requests
 import psycopg2
 from dotenv import load_dotenv
+
+# Die unzerstörbaren API-Sicherheitsgurte gegen Timeouts & Drosselung [1.32]
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
+
+# Holt deine funktionierende Multipolygon-Flächen-Synthese direkt mit rein
+from sync_multipolygons import sync_missing_multipolygons
+def create_robust_session():
+    """Erstellt eine HTTP-Sitzung, die Timeouts und 429er-Drosselungen automatisch wiederholt."""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=7,
+        backoff_factor=3,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["POST", "GET"],  # 👑 KORREKTUR: Erlaubt automatische Retries bei POST! [1.32]
+        raise_on_status=False
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 # 1. SETUP & ENV-LADEN
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -47,7 +68,7 @@ def process_single_municipality(muni_input, mode):
                string_agg(ST_Y(geom.geom) || ' ' || ST_X(geom.geom), ' ') as poly_points
         FROM (
             SELECT ars_code, zone_name, (ST_DumpPoints(ST_Simplify(geometry, 0.001))).* 
-            FROM public.polaris_infospaces 
+            FROM public.main_zones
             WHERE admin_level = 8
     """
     
@@ -72,13 +93,24 @@ def process_single_municipality(muni_input, mode):
         f'relation["boundary"="administrative"]["admin_level"~"8|9|10"](poly:"{poly_points_clean}");'
         f'node["place"~"village|hamlet|suburb"](poly:"{poly_points_clean}");'
         ");"
-        "out tags qt;"
+        "out body geom qt;"
     )
 
+    # --- DER UNZERSTÖRBARE API-SICHERHEITSGURT ---
+    # Nutzt die robuste Session mit automatischem Exponential-Backoff bei Timeouts! [1.32]
     try:
-        res = requests.post(OVERPASS_URL, data={'data': overpass_query}, headers=HEADERS, timeout=60)
-        res.raise_for_status()
+        with create_robust_session() as session:
+            res = session.post(OVERPASS_URL, data={'data': overpass_query}, headers=HEADERS, timeout=60)
+        
+        if res.status_code != 200:
+            return "ERROR", f"OSM Overpass-API dauerhaft blockiert oder überlastet (Status {res.status_code})"
+            
         data = res.json()
+        
+    except requests.exceptions.Timeout:
+        return "ERROR", "Zeitüberschreitung (Timeout) bei der Overpass-API nach 60 Sekunden."
+    except Exception as e:
+        return "ERROR", f"Unerwarteter Netzwerkfehler beim API-Abruf: {str(e)}"
     except Exception as e:
         cur.close(); conn.close()
         return "ERROR", f"OSM Overpass-API Fehler: {e}"
@@ -95,29 +127,47 @@ def process_single_municipality(muni_input, mode):
         el_type = el.get('type')
         osm_id = el.get('id')
         
-        # Ignoriere die Muttergemeinde selbst, falls sie in der Liste auftaucht
+        # 1. GENERELLES FILTER: Ignoriere ALLE Objekte auf Ebene 8 (Hauptgemeinden) [1.21]
+        # Das schmeißt sofort die "Großen Nachbarn" wie Goslar, Wernigerode etc. raus!
+        sub_level = int(tags.get('admin_level', 9)) if el_type != 'node' else 11
+        if sub_level == 8:
+            continue
+
         if sub_name == mutter_name and el_type == 'relation':
             continue
 
-        sub_ars = tags.get('de:regionalschluessel') or tags.get('de:amtlicher_gemeindeschluessel')
-        if not sub_ars:
-            sub_ars = f"{str(mutter_ars)[:9]}_{osm_id}"
+        # Eindeutige, duplikatfreie ID basierend auf Typ und OSM-ID
+        sub_ars = f"OSM_{el_type}_{osm_id}"
 
+        # 👑 DIE RÄUMLICHE POSTGIS-SICHERHEITSBARRIERE FÜR ALLE TYPEN:
+        # Wir ermitteln für jedes Objekt die exakte Koordinate (Node-Position oder Relations-Zentroid)
         if el_type == 'node':
-            # Reine Punkte markieren wir als künstliches Level 11 für unsere Puffer-Logik
+            geom_data = el.get("geometry", {})
+            lat = el.get("lat") or geom_data.get("lat")
+            lon = el.get("lon") or geom_data.get("lon")
             sub_level = 11
-            # Buntenbock-Fix: Wenn ein Ortsteil-Knoten den gleichen Namen wie ein bekannter Ort hat, zulassen
-            if sub_name:
-                subzones_found.append({
-                    "ars": str(sub_ars), "name": str(sub_name), "level": sub_level,
-                    "type": "node", "lat": el.get("lat"), "lon": el.get("lon")
-                })
         else:
+            # Bei Relationen nutzen wir das von Overpass mitgelieferte Zentroid oder die erste Koordinate
+            geom_data = el.get("bounds", el.get("center", {}))
+            lat = el.get("center", {}).get("lat") or geom_data.get("minlat")
+            lon = el.get("center", {}).get("lon") or geom_data.get("minlon")
             sub_level = int(tags.get('admin_level', 9))
-            if sub_name and sub_level in [8,9]:
+
+        # Nur verarbeiten, wenn wir gültige Koordinaten für den Test haben
+        if sub_name and lat and lon:
+            # 🚀 DER UNBESTECHLICHE CHECK: Liegt der Punkt WIRKLICH in der echten Mutter-Gemarkung?
+            # Das pulverisiert Grenzgänger und Nachbarorte sofort auf mathematischer Ebene!
+            cur.execute("""
+                SELECT ST_Contains(geometry, ST_SetSRID(ST_Point(%s, %s), 4326)) 
+                FROM public.main_zones 
+                WHERE ars_code = %s;
+            """, (float(lon), float(lat), mutter_ars))
+            
+            is_inside = cur.fetchone()
+            if is_inside and is_inside[0]:
                 subzones_found.append({
                     "ars": str(sub_ars), "name": str(sub_name), "level": sub_level,
-                    "type": "relation", "lat": None, "lon": None
+                    "type": el_type, "lat": float(lat), "lon": float(lon)
                 })
 
     if mode == 1:
@@ -133,29 +183,53 @@ def process_single_municipality(muni_input, mode):
     lk_code = str(mutter_ars)[:5]
 
     for zone in subzones_found:
-        cur.execute("SELECT ars_code FROM public.polaris_infospaces WHERE ars_code = %s;", (zone["ars"],))
-        exists = cur.fetchone()
+        # --- DIESEN BLOCK JETZT AUSKOMMENTIEREN ---
+        # cur.execute("SELECT ars_code FROM public.sub_zones WHERE ars_code = %s;", (zone["ars"],))
+        # exists = cur.fetchone()
 
-        if exists:
-            if mode == 2:
-                skipped_count += 1; continue
-            elif mode == 3:
-                cur.execute("DELETE FROM public.polaris_infospaces WHERE ars_code = %s;", (zone["ars"],))
-                overwritten_count += 1
+        # if exists:
+        #     if mode == 2:
+        #         skipped_count += 1; continue
+        #     elif mode == 3:
+        #         cur.execute("DELETE FROM public.sub_zones WHERE ars_code = %s;", (zone["ars"],))
+        #         overwritten_count += 1
+        # ------------------------------------------
 
         try:
             if zone["type"] == "node":
-                # Der magische PostGIS-Puffer: Erzeugt ein echtes 1500m-Polygon um den GPS-Punkt (Buntenbock)!
-                cur.execute("""
-                    INSERT INTO public.polaris_infospaces (ars_code, zone_name, admin_level, bundesland, landkreis, matrix_space_id, geometry)
-                    VALUES (%s, %s, %s, %s, %s, %s, ST_Buffer(ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 1500)::geometry);
-                """, (zone["ars"], zone["name"], zone["level"], bl_code, lk_code, f"!ars_{zone['ars']}:polaris-gateway.de", zone["lon"], zone["lat"]))
+                # Wir berechnen den Punkt und den Buffer vorab nativ in SQL, 
+                # damit Psycopg2 keine Typen-Konflikte mit mutter_ars bekommt
+                insert_query = """
+                INSERT INTO public.sub_zones (ars_code, parent_ars, zone_name, admin_level, bundesland, landkreis, geometry)
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, 
+                    ST_Buffer(ST_SetSRID(ST_Point(%s, %s), 4326)::geography, 1500)::geometry
+                )
+                ON CONFLICT (ars_code) DO UPDATE 
+                SET zone_name = EXCLUDED.zone_name,
+                    geometry = EXCLUDED.geometry,
+                    parent_ars = EXCLUDED.parent_ars;
+                """
+                # Expliziter Float-Cast für die Koordinaten beim Abschicken
+                cur.execute(insert_query, (
+                    str(zone["ars"]), 
+                    str(mutter_ars).strip(), 
+                    str(zone["name"]), 
+                    int(zone["level"]), 
+                    str(bl_code), 
+                    str(lk_code), 
+                    float(zone["lon"]), 
+                    float(zone["lat"])
+                ))
             else:
-                # Für echte Relationen ziehen wir die Geometrie später über den großen Bruder nach
-                cur.execute("""
-                    INSERT INTO public.polaris_infospaces (ars_code, zone_name, admin_level, bundesland, landkreis, matrix_space_id, geometry)
-                    VALUES (%s, %s, %s, %s, %s, %s, NULL);
-                """, (zone["ars"], zone["name"], zone["level"], bl_code, lk_code, f"!ars_{zone['ars']}:polaris-gateway.de"))
+                insert_query = """
+                INSERT INTO public.sub_zones (ars_code, parent_ars, zone_name, admin_level, bundesland, landkreis, geometry)
+                VALUES (%s, %s, %s, %s, %s, %s, NULL)
+                ON CONFLICT (ars_code) DO UPDATE
+                SET zone_name = EXCLUDED.zone_name,
+                    parent_ars = EXCLUDED.parent_ars;
+                """
+                cur.execute(insert_query, (zone["ars"], mutter_ars, zone["name"], zone["level"], bl_code, lk_code))
             inserted_count += 1
         except Exception as db_e:
             conn.rollback()
@@ -165,53 +239,97 @@ def process_single_municipality(muni_input, mode):
     conn.commit()
     cur.close(); conn.close()
 
-    summary = f"🎉 Erfolg für {mutter_name}: {inserted_count} importiert"
-    if skipped_count > 0: summary += f", {skipped_count} übersprungen"
-    if overwritten_count > 0: summary += f", {overwritten_count} aktualisiert"
+    # Vereinfachte, unzerstörbare Erfolgsmeldung
+    summary = f"🎉 Erfolg für {mutter_name}: {inserted_count} Ortsteile im SLG-Rack synchronisiert."
     return "SUCCESS", summary
 
 
 # 3. DAS HAUPTPROGRAMM
 def main():
-    while True:
-        print("\n==================================================")
-        print("      POLARIS SUBZONEN ERGÄNZUNGS-IMPORT          ")
-        print("==================================================")
-        muni_input = input("Gib den NAMEN oder den ARS der Gemeinde ein: ").strip()
-        if not muni_input:
-            continue
+    # Lädt die Umgebungsvariablen für das SLG-Rack
+    load_dotenv()
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    
+    if not DATABASE_URL:
+        print("❌ FEHLER: DATABASE_URL nicht in der .env gefunden!")
+        return
 
-        print("\n--- STEUERUNGS-MODUS ---")
-        print("1 = Gefundene Sub-Zonen nur ANZEIGEN (Kein Import)")
-        print("2 = Sub-Zonen IMPORTIEREN (Nur wenn noch nicht vorhanden)")
-        print("3 = Sub-Zonen IMPORTIEREN & ÜBERSCHREIBEN (Falls vorhanden)")
-        print("4 = Programm beenden")
+    # Verbindungsaufbau zur PostGIS
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+
+    try:
+        print("\n==========================================")
+        print("      POLARIS AUTOMATED OSM-BATCH IMPORT   ")
+        print("==========================================")
+        print("1 = Einzelne Gemeinde importieren (Interaktiv)")
+        print("2 = Ganzen Landkreis automatisch importieren (Sozialer Bot-Modus)")
         
-        mode_input = input("\nWähle einen Modus (1-4): ").strip()
-        if mode_input == '4':
-            print("👋 Programm beendet. Bis zum nächsten Mal!")
-            break
+        choice = input("\nDeine Auswahl: ").strip()
+        
+        if choice == "2":
+            lk_name = input("Exakter Name des Landkreises (z.B. 'Goslar'): ").strip()
+            mode_input = "3"  # Im Massenlauf erzwingen wir Modus 3 (Überschreiben)
             
-        if mode_input not in ['1', '2', '3']:
-            print("❌ Ungültige Modus-Auswahl!")
-            continue
+            # Holt alle registrierten Gemeinden des Landkreises aus der BKG-Tabelle
+            cur.execute("SELECT zone_name, ars_code FROM public.main_zones WHERE landkreis ILIKE %s;", (f"%{lk_name}%",))
+            municipalities = cur.fetchall()
+            
+            if not municipalities:
+                print(f"❌ Kein Landkreis mit dem Namen '{lk_name}' in main_zones gefunden!")
+                return
+                
+            print(f"\n🚀 Starte Massen-Import für {len(municipalities)} Gemeinden im Landkreis {lk_name}...")
+            
+            for idx, (muni_name, ars_code) in enumerate(municipalities, 1):
 
-        status, result = process_single_municipality(muni_input, int(mode_input))
+                print(f"\n📦 [{idx}/{len(municipalities)}] Verarbeite {muni_name} (ARS: {ars_code})...")
+                
+                status, result = process_single_municipality(ars_code, int(mode_input))
+                
+                if status == "ERROR":
+                    print(f"  ❌ Fehler bei {muni_name}: {result}")
+                else:
+                    print(f"  ✅ {result}")
+                    print("  🔗 Starte Multipolygon-Flächen-Synthese...")
+                    
+                    # 👑 MINIMALER FIX: Wertet den Syncer-Ausstieg unbestechlich aus
+                    sync_success = sync_missing_multipolygons()
+                    if not sync_success:
+                        print("\n👋 Massen-Import durch Syncer-Notbremse kontrolliert abgebrochen.")
+                        break # Bricht die Gemeinde-Hauptschleife augenblicklich ab!
 
-        if status == "ERROR":
-            print(f"\n❌ FEHLER: {result}")
-        elif status == "DATA":
-            if not result:
-                print(f"\nℹ️  Es wurden keine feineren Sub-Zonen in OSM für '{muni_input}' innerhalb des Polygons gefunden.")
-            else:
-                print(f"\n📋 Gefundene Sub-Zonen in OpenStreetMap ({len(result)} Einträge):")
-                print(f"{'ARS-Code':<14} | {'Ortsteil-Name':<30} | {'OSM-Level'}")
-                print("-" * 60)
-                for zone in result:
-                    lvl_str = f"admin_level={zone['level']}" if zone['level'] != 11 else "PLACE_NODE (Buffered)"
-                    print(f"{zone['ars']:<14} | {zone['name']:<30} | {lvl_str}")
-        elif status == "SUCCESS":
-            print(f"\n{result}")
+                if idx < len(municipalities):
+                    print("⏳ Sozialer Bot-Modus: Warte 5 Sekunden vor der nächsten Gemeinde...")
+                    time.sleep(5)
+
+            print("\n🏁 AUTOMATISIERTER LANDKREIS-BATCH-IMPORT ERFOLGREICH BEENDET!")
+
+        else:
+            # --- DER INTERAKTIVE EINZEL-IMPORT-FALLBACK ---
+            muni_input = input("\nGemeinde-Name oder ARS-Code: ").strip()
+            mode_input = input("Modus (1=Show, 2=Import, 3=Overwrite): ").strip()
+            
+            status, result = process_single_municipality(muni_input, int(mode_input))
+            if status == "ERROR":
+                print(f"\n❌ FEHLER: {result}")
+            elif status == "SUCCESS" or status == "DATA":
+                print(f"\n{result}")
+                
+                # PostGIS-Fix: Syntaxfehler behoben und korrekte Liste eingesetzt
+                if status == "SUCCESS" and int(mode_input) in [2, 3]:
+                    print("\n🔗 Triggere automatischen Multipolygon-Sync für Flächengrenzen...")
+                    try:
+                        sync_missing_multipolygons()
+                    except Exception as e:
+                        print(f"⚠️ Sync fehlgeschlagen: {e}")
+
+    except Exception as e:
+        print(f"\n💥 Kritischer Fehler in der Hauptschleife: {e}")
+    finally:
+        # Ressourcen sauber freigeben
+        cur.close()
+        conn.close()
 
 if __name__ == "__main__":
     main()

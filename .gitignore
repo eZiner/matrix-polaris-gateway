@@ -239,3 +239,6 @@ __pycache__/
 # Lokales Code-Archiv ausschließen
 obsolete/
 database/obsolete/
+
+# VS Code lokale Einstellungen blockieren
+.vscode/
