@@ -3,5 +3,17 @@
     "python.analysis.extraPaths": [
         "${workspaceFolder}/prototype/.venv/Lib/site-packages"
     ],
-    "python.terminal.useEnvFile": true
+    "python.terminal.useEnvFile": true,
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "POLARIS Lokal",
+            "database": "polaris_geo",
+            "username": "polaris"
+        }
+    ]
 }

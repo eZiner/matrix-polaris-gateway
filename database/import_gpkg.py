@@ -1,131 +1,130 @@
-# import_gpkg.py (KOMKOMBINIERTER BKG-INITIALISER - Speicherort: /database)
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+POLARIS INFRASTRUCTURE PIPELINE - BKG BASE IMPORTER
+Hebt die offiziellen Verwaltungsgrenzen (VG25) in die Tabelle 'main_zones'.
+Zeitstempel: Samstag, 12. September 2026
+Lizenz: Public Domain / CC0 (Gemeinfrei)
+"""
+
 import os
 import sys
-import geopandas as gpd
-from sqlalchemy import create_engine
 import psycopg2
+import pandas as pd
+import geopandas as gpd
 from dotenv import load_dotenv
-
-# 1. SETUP & ENV-LADEN
-script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir)
-env_path = os.path.join(project_root, 'production', '.env')
-load_dotenv(dotenv_path=env_path)
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    print("❌ FEHLER: DATABASE_URL fehlt in der .env!", file=sys.stderr)
-    sys.exit(1)
-
-# 🔥 KORREKTUR: Dynamischer Pfad aus der .env statt hart codiertem G:\-Laufwerk!
-GPKG_FILE = os.getenv("BKG_GPKG_PATH")
-if not GPKG_FILE:
-    print("❌ FEHLER: BKG_GPKG_PATH fehlt in der .env!", file=sys.stderr)
-    sys.exit(1)
+from sqlalchemy import create_engine
 
 def main():
-    if not os.path.exists(GPKG_FILE):
-        print(f"❌ FEHLER: GeoPackage-Datei nicht gefunden unter Pfad:\n➔ {GPKG_FILE}")
-        return
+    print("🚀 POLARIS BKG-Importer v2.0.0 wird gestartet...")
 
-    # ➔ ABSCHNITT A: GEOMETRIE-TABELLE (polaris_infospaces) VORBEREITEN
-    print("⏳ 1. Bereite PostGIS-Tabelle 'polaris_infospaces' vor...")
+    # 1. Dynamische Pfad-Auflösung für die .env-Datei
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    env_path = os.path.join(project_root, 'production', '.env')
+
+    if not os.path.exists(env_path):
+        print(f"❌ Fehler: .env-Datei nicht gefunden unter {env_path}")
+        sys.exit(1)
+        
+    load_dotenv(env_path)
+    
+    db_url = os.getenv("DATABASE_URL")
+    gpkg_path = os.getenv("BKG_GPKG_PATH")
+    
+    if not db_url or not gpkg_path:
+        print("❌ Fehler: DATABASE_URL oder BKG_GPKG_PATH fehlt in der .env")
+        sys.exit(1)
+
+    # SQLAlchemy Engine für den GeoPandas-Bulk-Stream vorbereiten
+    # Passt die URI von 'postgres://' auf 'postgresql://' an für SQLAlchemy-Kompatibilität
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    engine = create_engine(db_url)
+
+    # 2. Datenhygiene beim Start via nativem psycopg2-Treiber
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cur = conn.cursor()
-        cur.execute("CREATE EXTENSION IF NOT EXISTS postgis;")
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        cursor = conn.cursor()
         
-        # Erstellt die Tabelle mit der zukunftssicheren VARCHAR(50) Spalte
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS public.polaris_infospaces (
-                ars_code VARCHAR(50) PRIMARY KEY,
-                zone_name VARCHAR(255) NOT NULL,
-                admin_level INT NOT NULL,
-                bundesland VARCHAR(50) NOT NULL,
-                landkreis VARCHAR(100) NOT NULL,
-                matrix_space_id VARCHAR(255) UNIQUE,
-                geometry geometry(MultiPolygon, 4326)
-            );
-        """)
-        
-        # 🔥 DIE RETTUNG FÜR DEN INITIAL-RUN: Leert die alten Testdaten restlos aus!
-        # Das verhindert den "duplicate key"-Fehler beim erneuten BKG-Import.
-        cur.execute("TRUNCATE TABLE public.polaris_infospaces CASCADE;")
-        
+        print("🧹 Bereinige bestehende Tabellenstrukturen im Kaskaden-Verfahren...")
+        cursor.execute("TRUNCATE TABLE public.main_zones CASCADE;")
+        cursor.execute("TRUNCATE TABLE public.bkg_lan_names CASCADE;")
+        cursor.execute("TRUNCATE TABLE public.bkg_krs_names CASCADE;")
         conn.commit()
-        cur.close()
+        cursor.close()
         conn.close()
-        print("✅ Geometrie-Tabelle steht bereit und wurde für den Frischimport geleert.")
     except Exception as e:
-        print(f"❌ DB-Fehler beim Geometrie-Setup: {e}")
-        return
+        print(f"❌ DB-Verbindungsfehler beim Bereinigen: {e}")
+        sys.exit(1)
 
-    # Engine für den schnellen Pandas-Bulk-Stream aufbauen
-    engine = create_engine(DATABASE_URL.replace("postgres://", "postgresql://"))
+    # 3. RAM-schonender Import der Namens-Nachschlagetabellen (Ohne Geometrien!)
+    print("📦 Importiere Bundesländer (bkg_lan_names)...")
+    df_lan = gpd.read_file(gpkg_path, layer="vg25_lan", ignore_geometry=True)
+    # WICHTIG: Duplikate explizit basierend auf der PRIMARY KEY Spalte 'ARS' kicken!
+    df_lan_filtered = df_lan[["ARS", "GEN"]].drop_duplicates(subset=["ARS"], keep="first")
+    df_lan_filtered.to_sql("bkg_lan_names", engine, if_exists="append", index=False)
 
-    # ➔ ABSCHNITT B: RELATIONALE NAMENSLISTEN IMPORTIEREN
-    print("\n⏳ 2. Importiere relationale BKG-Namenslisten...")
-    try:
-        # ignore_geometry=True spart gewaltig RAM und Rechenzeit
-        print("   ➔ Lade Bundesland-Namen (vg25_lan)...")
-        df_lan = gpd.read_file(GPKG_FILE, layer="vg25_lan", ignore_geometry=True)
-        df_lan[["ARS", "GEN"]].to_sql("bkg_lan_names", engine, if_exists="replace", index=False)
-        print("   ✅ Tabelle 'bkg_lan_names' erfolgreich befüllt.")
+    print("📦 Importiere Landkreise (bkg_krs_names)...")
+    df_krs = gpd.read_file(gpkg_path, layer="vg25_krs", ignore_geometry=True)
+    # Analog für die Landkreise, falls dort Bodensee-Anteile doppeln
+    df_krs_filtered = df_krs[["ARS", "GEN"]].drop_duplicates(subset=["ARS"], keep="first")
+    df_krs_filtered.to_sql("bkg_krs_names", engine, if_exists="append", index=False)
 
-        print("   ➔ Lade Landkreis-Namen (vg25_krs)...")
-        df_krs = gpd.read_file(GPKG_FILE, layer="vg25_krs", ignore_geometry=True)
-        df_krs[["ARS", "GEN"]].to_sql("bkg_krs_names", engine, if_exists="replace", index=False)
-        print("   ✅ Tabelle 'bkg_krs_names' erfolgreich befüllt.")
-    except Exception as e:
-        print(f"❌ Fehler beim Import der Namenstabellen: {e}")
-        return
+    # 4. Laden und Verarbeiten der Gemeinde-Hauptzonen (admin_level = 8)
+    print("🗺️ Lade Gemeindegrenzen aus GeoPackage (Das kann einen Moment dauern)...")
+    gdf_gem = gpd.read_file(gpkg_path, layer="vg25_gem")
 
-    # ➔ ABSCHNITT C: DIE HOCHAUFLÖSENDEN BKG-GEMEINDEN STREAMEN
-    print("\n⏳ 3. Lese hochauflösenden Gemeinde-Layer 'vg25_gem' ein...")
-    try:
-        gdf = gpd.read_file(GPKG_FILE, layer="vg25_gem")
-    except Exception as e:
-        print(f"❌ Fehler beim Einlesen des Gemeinde-Layers: {e}")
-        return
+    # Projektion auf das globale GPS-Standardformat (WGS84 / EPSG:4326) erzwingen
+    if gdf_gem.crs != "EPSG:4326":
+        print("🔄 Projiziere Geometrien auf EPSG:4326 (WGS84)...")
+        gdf_gem = gdf_gem.to_crs("EPSG:4326")
 
-    print(f"   ✅ {len(gdf)} BKG-Datensätze geladen. Projiziere live auf WGS84 (GPS)...")
-    gdf = gdf.to_crs(epsg=4326)
+    # Flexibler Spalten-Finder für die Einwohnerzahl (BKG-Varianten abfangen)
+    ewz_col = None
+    for candidate in ["EWZ", "E_EWZ", "EINWOHNER"]:
+        if candidate in gdf_gem.columns:
+            ewz_col = candidate
+            print(f"🔍 Einwohnerzahl-Spalte im BKG-Satz gefunden: '{ewz_col}'")
+            break
 
-    print("⏳ 4. Filter Großstädte (elastische POLARIS-Regel)...")
-    if "EWZ" in gdf.columns:
-        gdf = gdf[gdf["EWZ"] <= 100000]
-        print(f"   ✅ Gefiltert auf {len(gdf)} Gemeinden unter 100k Einwohnern.")
+    # Filterung: Fokus auf kleinere und mittlere Kommunen
+    if ewz_col:
+        print("⏳ Filterung der Großstädte (> 100.000 Einwohner) für das ländliche Mesh...")
+        gdf_gem[ewz_col] = pd.to_numeric(gdf_gem[ewz_col], errors="coerce").fillna(0)
+        gdf_gem_filtered = gdf_gem[gdf_gem[ewz_col] < 100000].copy()
+    else:
+        print("⚠️ Warnung: Keine bekannte Einwohner-Spalte gefunden. Großstadt-Filter wird übersprungen!")
+        gdf_gem_filtered = gdf_gem.copy()
 
-    # Spalten für deine PostGIS-Tabelle mappen
-    rename_dict = {
-        "ARS": "ars_code",
-        "GEN": "zone_name",
-        "SN_L": "bundesland",
-        "SN_K": "landkreis"
-    }
-    available_renames = {k: v for k, v in rename_dict.items() if k in gdf.columns}
-    gdf = gdf.rename(columns=available_renames)
+    # 5. Daten-Synthese und Mapping auf das neue Hybrid-Schema
+    print("🛠️ Bereite DataFrame für die Tabelle 'main_zones' vor...")
+    
+    # Temporäre Mapping-Dictionaries für die Klartext-Namen erzeugen
+    lan_map = dict(zip(df_lan_filtered["ARS"], df_lan_filtered["GEN"]))
+    krs_map = dict(zip(df_krs_filtered["ARS"], df_krs_filtered["GEN"]))
 
-    # Hilfsspalten für POLARIS hinzufügen
-    gdf["matrix_space_id"] = gdf["ars_code"].apply(lambda ars: f"!ars_{ars}:polaris-gateway.de")
-    gdf["admin_level"] = 8
+    # Extrahiere die ARS-Präfixe zur Verknüpfung der Namen
+    gdf_gem_filtered["lan_ars"] = gdf_gem_filtered["ARS"].str.slice(0, 2)
+    gdf_gem_filtered["krs_ars"] = gdf_gem_filtered["ARS"].str.slice(0, 5)
 
-    # Nur die Spalten behalten, die exakt in unser Schema passen
-    keep_cols = ["ars_code", "zone_name", "admin_level", "bundesland", "landkreis", "matrix_space_id", "geometry"]
-    gdf = gdf[[c for c in keep_cols if c in gdf.columns]]
+    # Erzeuge das finale Daten-Layout für die Datenbank
+    df_final = pd.DataFrame()
+    df_final["ars_code"] = gdf_gem_filtered["ARS"]
+    df_final["zone_name"] = gdf_gem_filtered["GEN"]
+    df_final["admin_level"] = 8  # Fixiert auf BKG Gemeindeebene
+    df_final["bundesland"] = gdf_gem_filtered["lan_ars"].map(lan_map).fillna("Unbekannt")
+    df_final["landkreis"] = gdf_gem_filtered["krs_ars"].map(krs_map).fillna("Unbekannt")
+    df_final["is_polaris_space"] = False  # Standardmäßig inaktiv bis zur Aktivierung im Rathaus
+    
+    # Geometrie wieder anfügen
+    gdf_final = gpd.GeoDataFrame(df_final, geometry=gdf_gem_filtered["geometry"])
 
-    print(f"\n⏳ 5. Streamen der Geometrien direkt in deine PostGIS-Datenbank...")
-    try:
-        # Falls die Tabelle leer ist oder du sie überschrieben hast, befüllt 'append' sie sauber neu
-        gdf.to_postgis("polaris_infospaces", engine, if_exists="append", index=False)
-        print("\n=====================================================================")
-        print("🌐 INITIALISIERUNG ERFOLGREICH! BKG-BASISDATEN ENVIRONMENT-GELADEN!")
-        print("=====================================================================")
-        print("➔ Tabelle 'polaris_infospaces' (admin_level 8) ist bereit.")
-        print("➔ Relationale Namenstabellen sind 100% dynamisch verknüpft.")
-        print("=====================================================================")
-    except Exception as e:
-        print(f"❌ Fehler beim Datenbank-Upload der Geometrien: {e}")
+    # 6. Bulk-Stream in die PostgreSQL / PostGIS Datenbank zünden
+    print(f"🔥 Schiebe {len(gdf_final)} Gemeinden in die Tabelle 'main_zones'...")
+    gdf_final.to_postgis("main_zones", engine, if_exists="append", index=False)
+
+    print("✅ BKG Base Importer erfolgreich beendet! Das Datenfundament steht.")
 
 if __name__ == "__main__":
     main()
