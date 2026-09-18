@@ -1,0 +1,17 @@
+# ==============================================================================
+# POLARIS GATEWAY DATABASE PIPELINE - PYTHON DEPENDENCIES
+# ==============================================================================
+
+# Geodaten-Verarbeitung und GeoPackage-Support
+geopandas>=0.14.0
+shapely>=2.0.0
+
+# PostgreSQL/PostGIS Datenbank-Treiber
+psycopg2-binary>=2.9.0
+
+# API-Kommunikation und Retry-Sicherungen (Overpass API)
+requests>=2.31.0
+urllib3>=2.0.0
+
+# Laden der .env Konfigurationsdatei
+python-dotenv>=1.0.0
