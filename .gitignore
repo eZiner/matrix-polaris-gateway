@@ -243,8 +243,6 @@ database/obsolete/
 # VS Code lokale Einstellungen blockieren
 .vscode/
 
-production/src/bin/spielplatz.rs
-
 # ==============================================================================
 # 🛰️ POLARIS GATEWAY SECURITY EXTRACTIONS
 # ==============================================================================
