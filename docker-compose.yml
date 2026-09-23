@@ -1,7 +1,7 @@
-version: '3.8'
+﻿version: '3.8'
 
 services:
-  # 1. POSTGIS-DATENBANK-DIENST
+  # 1. POSTGIS-DATENBANK-DIENST (Die geografische Basis)
   polaris-db:
     image: postgis/postgis:16-3.4
     container_name: polaris-postgis-gateway
@@ -20,7 +20,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # 2. DER LOKALE SYNAPSE-SERVER (INSEMODUS)
+  # 2. DER LOKALE SYNAPSE-SERVER (Der autarke Matrix-Knoten für den Inselmodus)
   synapse:
     image: matrixdotorg/synapse:latest
     container_name: polaris-synapse
@@ -31,11 +31,27 @@ services:
       - ./synapse_data:/data
     environment:
       - SYNAPSE_SERVER_NAME=${MATRIX_SERVER_NAME}
-      - SYNAPSE_REPORT_STATS="no"
-      - SYNAPSE_ENABLE_REGISTRATION="yes"
+      - SYNAPSE_REPORT_STATS=no
+      - SYNAPSE_ENABLE_REGISTRATION=yes
     depends_on:
       polaris-db:
         condition: service_healthy
+
+  # 3. DAS RUST GEOFENCE GATEWAY
+  polaris-gateway:
+    build:
+      context: ./production
+      dockerfile: Dockerfile
+    container_name: polaris-gateway
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      polaris-db:
+        condition: service_healthy
+      synapse:
+        condition: service_started
+        
 volumes:
   polaris_postgres_data:
     driver: local
