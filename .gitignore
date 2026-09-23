@@ -244,3 +244,21 @@ database/obsolete/
 .vscode/
 
 production/src/bin/spielplatz.rs
+
+# ==============================================================================
+# 🛰️ POLARIS GATEWAY SECURITY EXTRACTIONS
+# ==============================================================================
+
+# Lokale, verschlüsselte Matrix-Sitzungsdaten (Enthält dein Auth-Token!)
+.matrix_session.json
+production/.matrix_session.json
+
+# Lokale SQLite-Datenbank für die Ende-zu-Ende-Verschlüsselung (E2EE)
+*.db
+*.db-journal
+polaris_crypto_store.db
+production/polaris_crypto_store.db
+
+# Allgemeine Umgebungsvariablen absichern
+.env
+production/.env
