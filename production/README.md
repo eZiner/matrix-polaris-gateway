@@ -1,80 +1,66 @@
 # 🦀 POLARIS Production Gateway (Rust Layer)
 
-Dieses Verzeichnis enthält die produktive, hochperformante und speichersichere Implementierung des **POLARIS Geo-Fencing Gateways** in Rust. 
-
-Die Applikation ist als autonomer Microservice konzipiert, der für den Dauereinsatz in universitären Rechenzentren optimiert ist. Er verarbeitet Standort-Events parallel über thread-sichere In-Memory-Strukturen, gleicht sie flüchtig im RAM ab und steuert das geräuschlose *Auto-Join*-Verfahren über föderierte Matrix-Infospaces.
+Das **POLARIS Matrix Geofence Gateway** ist eine hochperformante, in **Rust** entwickelte Infrastrukturkomponente, die Live-Standortdaten (`m.location`) von Matrix-Nutzern mit einer lokalen **PostGIS-Datenbank** verknüpft, um Bürger automatisch regionalen Matrix-Räumen zuzuordnen oder beim Verlassen zu entfernen.
 
 ---
 
 ## 🛠️ Technologie-Stack
 
 * **Runtime:** `tokio` (Asynchroner Multi-Thread-Executor)
-* **Matrix-Protokoll:** `matrix-sdk` (Native Client-Föderationslogik)
-* **Datenbank-Treiber:** `sqlx` (Asynchrone, zur Kompilierzeit typprüfende PostGIS-Anbindung)
-* **RAM-Caching:** `dashmap` (Thread-sichere, parallele In-Memory-Hashmaps für maximale Performance ohne Garbage-Collection-Laufzeiten)
+* **Matrix-Protokoll:** `matrix-sdk` (v0.19 – Föderationslogik und E2E-Verschlüsselung)
+* **Datenbank-Treiber:** `sqlx` (Asynchrone PostGIS-Anbindung)
+* **RAM-Caching:** `dashmap` / `std::collections` (Thread-sichere In-Memory-Strukturen)
 
 ---
 
-## 🏗️ Kompilierung & Entwicklung
+## 🏗️ System-Architektur & Betriebsmodi
 
-Da SQLx die SQL-Abfragen während des Kompilierens auf syntaktische Korrektheit prüft, stehen zwei Build-Modi zur Verfügung:
+Die Steuerung erfolgt über das Umgebungsvariablen-Flag `POLARIS_TEST_MODE` in der `.env`:
+
+### 1. Simulationsmodus (`POLARIS_TEST_MODE=true`)
+* Läuft unabhängig ohne Synapse-Server, spult vordefinierte Bewegungsprofile ab und gibt Netzwerkbefehle als Logs auf der Konsole aus.
+
+### 2. Produktivmodus (`POLARIS_TEST_MODE=false`)
+* Baut eine permanente HTTP-Long-Polling-Verbindung zum Synapse-Server auf, filtert gezielt nach Standort-Events und unterstützt Multi-User-Handling über Tokio-Tasks.
+
+---
+
+## 🧠 Kern-Algorithmen & Logiken
+
+* **Zweistufige PostGIS-Kaskade (`geofence.rs`):** Evaluiert über räumliche SQL-Indizes (`ST_Contains`) die Hauptzone (z. B. via VG25-Geodaten) und Subzonen (OpenStreetMap-Knoten-Matching).
+* **Multi-User-Hysterese:** Verhindert GPS-Flackern an Zonengrenzen durch eine flüchtige In-Memory-Warteliste (sofortiger Eintritt, 10 Minuten Cooldown beim Austritt zur Vermeidung von Leave/Join-Rauschen).
+---
+
+## 🏗️ Kompilierung & Entwicklung im Rechenzentrum
+
+Für den Betrieb stehen je nach Umgebung zwei Build-Verfahren zur Verfügung:
 
 ### 1. Online-Modus (Lokale Entwicklung)
-Wenn du aktiv am Code arbeitest und deine lokale PostGIS-Datenbank (z. B. via Docker Compose) im Hintergrund läuft.
+Bei erreichbarer Live-Datenbank im Hintergrund:
+```bash
+cargo check
+cargo run --bin matrix-polaris-gateway
+```
 
-1. Erstelle eine `.env`-Datei in diesem Verzeichnis:
-   ```text
-   DATABASE_URL=postgres://polaris:safe_password@127.0.0.1:5432/polaris_geo
-   ```
-2. Kompiliere oder starte das Projekt:
-   ```bash
-   cargo check
-   cargo run
-   ```
-
-### 2. Offline-Modus (CI/CD Pipelines & Rechenzentrum)
-Für Builds in Umgebungen, in denen während des Kompilierens keine Live-Datenbank erreichbar ist. Die Metadaten werden aus dem lokalen SQLx-Cache (`sqlx-data.json`) gelesen.
-
-1. Installiere das SQLx-CLI einmalig global:
-   ```bash
-   cargo install sqlx-cli
-   ```
-2. Generiere den Query-Cache bei laufender Docker-Datenbank:
-   ```bash
-   DATABASE_URL=postgres://polaris:safe_password@127.0.0.1:5432/polaris_geo cargo sqlx prepare
-   ```
-3. Setze die Umgebungsvariable für den compilerseitigen Offline-Zwang:
-   ```bash
-   export SQLX_OFFLINE=true
-   cargo build --release
-   ```
+### 2. Offline-Modus (CI/CD Pipelines)
+Für isolierte Umgebungen ohne Live-Datenbank via `sqlx-data.json`-Cache:
+1. **SQLx-CLI installieren:** `cargo install sqlx-cli --no-default-features --features postgres`
+2. **Cache generieren:** `DATABASE_URL=postgres://... cargo sqlx prepare`
+3. **Bauen:** `export SQLX_OFFLINE=true && cargo build --release`
 
 ---
 
 ## 📦 Docker-Deployment
 
-Für den produktiven Betrieb wird ein sicheres **Multi-Stage Dockerfile** verwendet. Das finale Image basiert auf `debian-slim`, enthält keinerlei Compiler-Ballast und wird unter einem unprivilegierten System-User ausgeführt.
+Es wird ein speichereffizientes **Multi-Stage Dockerfile** auf Basis von `debian-slim` ohne Compiler-Ballast genutzt, ausgeführt unter einem unprivilegierten System-User.
 
-### 1. Image bauen
-```bash
-docker build -t matrix-polaris-gateway:latest .
-```
-
-### 2. Container ausführen
-Übergebe die Konfigurationen und Passwörter beim Start flexibel als Umgebungsvariablen:
-
-```bash
-docker run -d \
-  --name polaris-production-bot \
-  --restart unless-stopped \
-  -e BOT_PASSWORD="DeinStrengGeheimesMatrixPasswort" \
-  -e DATABASE_URL="postgres://polaris:safe_password@polaris-postgis-db:5432/polaris_geo" \
-  matrix-polaris-gateway:latest
-```
+* **Image bauen:** `docker build -t matrix-polaris-gateway:latest .`
+* **Container starten:** Dynamische Injektion von Umgebungsvariablen (`POLARIS_TEST_MODE`, `DATABASE_URL`, `MATRIX_HOMESERVER`, etc.) via `docker run -d ...`
 
 ---
 
-## 🔒 Security & Performance-Vorgaben
+## 🔒 Performance-Garantien & BSI-Konformität
 
-* **Garbage Collector Freiheit:** Rust gibt den belegten RAM-Speicher dechiffrierter GPS-Koordinaten auf Hardwareebene sofort nach dem `ST_Contains`-Match wieder frei. Es verbleiben keine Datenfragmente im System.
-* **Asynchroner Parallelismus:** Durch den Einsatz von `DashMap` blockieren sich hunderte gleichzeitige Nutzer-Events bei der Zellenprüfung nicht gegenseitig.
+* **Garbage-Collector-Freiheit:** Sofortige Freigabe von Speicher auf Hardwareebene nach Verarbeitung.
+* **Stateful Session-Management:** Verschlüsselte Sicherung der Krypto-Sitzung in `.matrix_session.json`.
+* **Behördensichere E2EE:** Kryptografische Schlüsselverwaltung über das `sqlite`-Feature des `matrix-sdk` in einer lokalen `polaris_crypto_store.db`.

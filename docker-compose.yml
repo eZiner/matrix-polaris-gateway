@@ -1,31 +1,41 @@
 version: '3.8'
 
 services:
-  # 🌐 POSTGIS-DATENBANK-DIENST
+  # 1. POSTGIS-DATENBANK-DIENST
   polaris-db:
-    # Wir nutzen das offizielle, hochoptimierte PostGIS-Image (Postgres 16 + PostGIS 3.4)
     image: postgis/postgis:16-3.4
     container_name: polaris-postgis-gateway
     restart: always
     environment:
-      # Diese Variablen greifen beim allerersten Start und erzeugen deine Struktur
-      - POSTGRES_USER=polaris
-      - POSTGRES_PASSWORD=vG0YEhWplJql2boa1usU # Entspricht deiner heutigen lokalen .env
-      - POSTGRES_DB=polaris_geo # Exakt der Name aus deiner produktiven Konfiguration!
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
     ports:
-      # Spiegelt den Postgres-Standardport nach außen auf deinen Localhost
       - "5432:5432"
     volumes:
-      # Sichert die Geometrie-Daten dauerhaft auf deiner Festplatte (überlebt Container-Restarts)
       - polaris_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      # Sichert ab, dass das geplante Rust-Gateway erst startet, wenn PostGIS bereit ist
-      test: ["CMD-SHELL", "pg_isready -U polaris -d polaris_geo"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # 2. DER LOKALE SYNAPSE-SERVER (INSEMODUS)
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: polaris-synapse
+    restart: always
+    ports:
+      - "8008:8008"
+    volumes:
+      - ./synapse_data:/data
+    environment:
+      - SYNAPSE_SERVER_NAME=${MATRIX_SERVER_NAME}
+      - SYNAPSE_REPORT_STATS="no"
+      - SYNAPSE_ENABLE_REGISTRATION="yes"
+    depends_on:
+      polaris-db:
+        condition: service_healthy
 volumes:
-  # Das persistente Docker-Volume für deine BKG- und OSM-Geometrien
   polaris_postgres_data:
     driver: local

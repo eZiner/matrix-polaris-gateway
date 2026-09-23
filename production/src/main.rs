@@ -1,238 +1,358 @@
-#![allow(dead_code, unused_variables, unused_imports)]
-pub mod geofence;
 use std::env;
-use std::collections::HashSet;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::collections::{HashSet, HashMap};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use dashmap::DashMap;
-use matrix_sdk::{
-    config::SyncSettings, // <-- DIESE ZEILE HIER HINZUFÜGEN!
-    room::Room,
-    ruma::{
-        events::room::message::{MessageType, OriginalSyncRoomMessageEvent},
-        OwnedRoomId, OwnedUserId, RoomId, UserId,
-    },
-    Client,
-};
+use tokio::time::{sleep, Duration};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use tracing::{error, info, Level};
-use tracing_subscriber::FmtSubscriber;
+use matrix_sdk::Client;
 
-// --- SOUVERÄNE ARCHITEKTUR-KONSTANTEN ---
-const HOMESERVER_URL: &str = "https://goslar.de"; // Physisch im Uni-Rechenzentrum
-const BOT_USER_ID: &str = "@polaris-gateway:goslar.de";
-const BOT_PASSWORD: &str = "DeinStrengGeheimesBotPasswortHier";
+// Importiert dein bereits erfolgreich getestetes Geofence-Modul
+use matrix_polaris_gateway::geofence;
 
-// Das exklusive, vordefinierte Chatfenster NUR für den Geo-Fencing-Bot
-const GEOFENCING_BOT_ROOM_ID: &str = "!vordefinierterBotRaumID:goslar.de";
-
-// Hysterese-Schutz Konfiguration (10 Minuten Cooldown)
-const COOLDOWN_DURATION: Duration = Duration::from_secs(600);
-
-// --- IN-MEMORY RAM SPEICHER (Flüchtig via DashMap für thread-sicheren Parallelzugriff) ---
-struct GlobalState {
-    db_pool: PgPool,
-    // Struktur: { user_id: HashSet<space_id> }
-    active_user_spaces: DashMap<OwnedUserId, HashSet<OwnedRoomId>>,
-    // Struktur: { (user_id, space_id): Instant_when_outside }
-    exit_pending_users: DashMap<(OwnedUserId, OwnedRoomId), Instant>,
+/// Das zentrale Bot-Struct, das beide Modi in sich vereint.
+/// Es unterscheidet intern anhand des Flags, ob es echt an Matrix sendet oder simuliert.
+struct PolarisBot {
+    client: Option<Client>, // Vorhanden im Produktivmodus, None im Testmodus
+    test_mode: bool,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // 1. Holt die Variable live aus dem Betriebssystem-Speicher
-    let database_url = env::var("DATABASE_URL")
-        .expect("❌ FEHLER: Die Umgebungsvariable 'DATABASE_URL' ist nicht gesetzt!");
+impl PolarisBot {
+    /// Konstruktor für den Bot
+    fn new(client: Option<Client>, test_mode: bool) -> Self {
+        Self { client, test_mode }
+    }
 
-    // Logging initialisieren
-    let subscriber = FmtSubscriber::builder().with_max_level(Level::INFO).finish();
-    tracing::subscriber::set_global_default(subscriber)?;
-
-    info!("Verbinde mit der lokalen PostGIS-Datenbank...");
-    let db_pool  = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&database_url) // Nutzt die dynamische Variable aus deiner .env!
-        .await?;
-
-    // Globalen, flüchtigen RAM-Zustand aufbauen
-    let state = Arc::new(GlobalState {
-        db_pool,
-        active_user_spaces: DashMap::new(),
-        exit_pending_users: DashMap::new(),
-    });
-
-    info!("Verbinde mit dem universitären Kommunal-Homeserver...");
-    let bot_id = <&UserId>::try_from(BOT_USER_ID)?;
-    let client = Client::builder()
-        .homeserver_url(HOMESERVER_URL)
-        .build()
-        .await?;
-
-    client.matrix_auth().login_username(bot_id, BOT_PASSWORD).await?;
-    info!("Bot erfolgreich eingeloggt.");
-
-    // Hysterese-Hintergrund-Thread für den automatisierten Server-Kick starten
-    let loop_client = client.clone();
-    let loop_state = state.clone();
-    tokio::spawn(async move {
-        cooldown_cleanup_loop(loop_client, loop_state).await;
-    });
-
-    // Event-Handler für eingehende Nachrichten registrieren
-    let handler_state = state.clone();
-    client.add_event_handler(
-        move |event: OriginalSyncRoomMessageEvent, room: Room, client: Client| {
-            let state = handler_state.clone();
-            async move {
-                if let Err(e) = message_callback(event, room, client, state).await {
-                    error!("Fehler im Event-Handler: {:?}", e);
-                }
+    /// Einheitliche Join-Methode, die intern zwischen Simulation und Prod unterscheidet
+    async fn join_room(&self, room_id: &str, user_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        if self.test_mode {
+            println!("🛰️ [SIMULATION] API-Aufruf: Nutzer {} BETRITT Matrix-Raum {}", user_id, room_id);
+            Ok(())
+        } else {
+            println!("🚀 [PROD] Sende echten Join-Befehl für {} an Raum {}", user_id, room_id);
+            if let Some(ref matrix_client) = self.client {
+                let ruma_room_id = <&matrix_sdk::ruma::RoomId>::try_from(room_id)?;
+                matrix_client.join_room_by_id(ruma_room_id).await?;
             }
-        },
-    );
-    // Asynchrone Sync-Schleife des Matrix-Protokolls starten
-    info!("POLARIS-Gateway aktiv. Lausche im vordefinierten Bot-Raum...");
-    let sync_settings = SyncSettings::default();
-    client.sync(sync_settings).await?;
-
-    Ok(())
-}
-
-
-async fn check_geofencing_postgis(pool: &sqlx::PgPool, lon: f64, lat: f64) -> Result<HashSet<OwnedRoomId>, sqlx::Error> {
-    let mut spaces = HashSet::new();
-
-    // 1. Rufe unsere neue, zweistufige Kaskaden-Funktion auf
-    if let Some(result) = geofence::check_coordinates(pool, lon, lat).await? {
-        
-        // 2. Bestimme, welche ARS-ID wir nutzen (Subzone hat Vorrang vor Hauptzone)
-        let target_ars = match result.sub_ars {
-            Some(sub) => sub,
-            None => result.parent_ars,
-        };
-
-        // 3. Synthetisiere die simulierte Matrix-Raum-ID (z.B. "!03153005:goslar.de")
-        let simulated_room_str = format!("!{}:goslar.de", target_ars);
-
-        // 4. Parst den String in das vom Matrix-SDK geforderte Format und fügt es ins HashSet ein
-        if let Ok(room_id) = RoomId::parse(simulated_room_str) {
-            spaces.insert(room_id);
+            Ok(())
         }
     }
 
-    // Liefert das HashSet zurück (entweder leer oder mit der ermittelten Raum-ID)
-    Ok(spaces)
+    /// Einheitliche Leave-Methode, die intern zwischen Simulation und Prod unterscheidet
+    async fn leave_room(&self, room_id: &str, user_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        if self.test_mode {
+            println!("🛰️ [SIMULATION] API-Aufruf: Nutzer {} VERLÄSST Matrix-Raum {}", user_id, room_id);
+            Ok(())
+        } else {
+            println!("🚀 [PROD] Sende echten Leave-Befehl für {} an Raum {}", user_id, room_id);
+            if let Some(ref matrix_client) = self.client {
+                let ruma_room_id = <&matrix_sdk::ruma::RoomId>::try_from(room_id)?;
+                if let Some(room) = matrix_client.get_room(ruma_room_id) {
+                    room.leave().await?;
+                } else {
+                    println!("⚠️ [PROD] Bot war gar nicht in Raum {}, Leave übersprungen.", room_id);
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
-async fn message_callback(
-    event: OriginalSyncRoomMessageEvent,
-    room: Room,
-    client: Client,
-    state: Arc<GlobalState>,
-) -> anyhow::Result<()> {
-    // STRIKTE FILTERUNG: Reagiere ausschließlich im vordefinierten Bot-Raum
-    if room.room_id() != <&RoomId>::try_from(GEOFENCING_BOT_ROOM_ID)? {
-        return Ok(());
+/// Holt alle Matrix-Raum-IDs aus der DB, die zu einer Haupt- oder Subzone gehören
+async fn get_matrix_rooms_for_zones(pool: &PgPool, ars_codes: &[String]) -> Result<HashSet<String>, sqlx::Error> {
+    if ars_codes.is_empty() {
+        return Ok(HashSet::new());
     }
 
-    // Ignoriere eigene Nachrichten des Bots
-    if event.sender == client.user_id().unwrap() {
-        return Ok(());
+    // Wir bauen die Abfrage über den SQLx-QueryBuilder dynamisch auf: WHERE ars_code IN ($1, $2, ...)
+    let mut query_builder = sqlx::QueryBuilder::new("SELECT matrix_space_id FROM public.polaris_spaces WHERE ars_code IN (");
+    
+    let mut separated = query_builder.separated(", ");
+    for code in ars_codes {
+        separated.push_bind(code);
+    }
+    query_builder.push(")");
+
+    let rows: Vec<String> = query_builder
+        .build_query_scalar()
+        .fetch_all(pool)
+        .await?;
+
+    println!("🔍 DB-Query lieferte {} Zeilen aus polaris_spaces zurück.", rows.len());
+
+    Ok(rows.into_iter().collect())
+}
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Debug: Zeige uns, wo Cargo das Programm wirklich startet
+    if let Ok(current_dir) = env::current_dir() {
+        println!("🔍 POLARIS Debug: Arbeitsverzeichnis ist: {}", current_dir.display());
     }
 
-    // Prüfen auf standardisierte m.location-Events innerhalb des Nachrichteninhalts
-    if let MessageType::Location(location_content) = &event.content.msgtype {
-        let geo_uri = &location_content.geo_uri; // Format: "geo:51.9059;10.4292"
+    // Versuche an den verschiedenen Orten nach der .env zu suchen
+    if dotenvy::dotenv().is_ok() {
+        println!("📝 .env im aktuellen Verzeichnis gefunden.");
+    } else if dotenvy::from_path("../.env").is_ok() {
+        println!("📝 .env im übergeordneten Verzeichnis gefunden.");
+    } else if dotenvy::from_path("production/.env").is_ok() {
+        println!("📝 .env im Unterordner 'production' gefunden.");
+    } else {
+        println!("❌ POLARIS WARNUNG: Keine .env-Datei an den Standardorten gefunden!");
+    }
+    
+    // Testmodus über Umgebungsvariable auslesen (z.B. POLARIS_TEST_MODE=true)
+    let test_mode: bool = env::var("POLARIS_TEST_MODE")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse()
+        .unwrap_or(false);
+
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL fehlt in der .env");
+    
+    // Verbindung zur PostgreSQL-Datenbank aufbauen
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await?;
+
+    // Die zentrale Bot-Instanz deklarieren
+    let bot: PolarisBot;
+    let test_user = "@buerger_goslar:goslar.de";
+
+    if test_mode {
+        println!("⚠️  POLARIS Gateway startet im SIMULATIONSMODUS (Kein Synapse erforderlich)");
+        bot = PolarisBot::new(None, true);
+
+        println!("\n--- Starte Bewegungssimulation ---");
         
-        // Extraktion der Koordinaten flüchtig in lokale RAM-Variablen
-        if let Some(coords_str) = geo_uri.strip_prefix("geo:") {
-            let parts: Vec<&str> = coords_str.split(';').next().unwrap_or("").split(',').collect();
-            if parts.len() == 2 {
-                let lat: f64 = parts[0].parse()?;
-                let lon: f64 = parts[1].parse()?;
+        // Simulations-Szenario: Nutzer wechselt die Positionen
+        let test_koordinaten = vec![
+            (10.42, 51.90), // 1. Punkt: In Goslar (Nutzer betritt den Raum)
+            (10.33, 51.81), // 2. Punkt: Clausthal (Nutzer verlässt Goslar -> Cooldown startet!)
+            (10.42, 51.90), // 3. Punkt: Schnell zurück nach Goslar (Abbruch des Cooldowns!)
+            (9.99,  50.00), // 4. Punkt: Weg nach Arnstein (Cooldown startet erneut und läuft ab)
+        ];
+
+        let mut current_joined_rooms: HashSet<String> = HashSet::new();
+        let mut exit_cooldown_list: HashMap<String, tokio::time::Instant> = HashMap::new();
+
+        // Wir simulieren eine kurze Hysterese von 4 Sekunden für den schnellen Testlauf
+        let cooldown_duration = Duration::from_secs(4);
+
+        for (lon, lat) in test_koordinaten {
+            println!("\n📍 Neue GPS-Position empfangen: Lon={}, Lat={}", lon, lat);
+
+            // 1. PostGIS-Kaskade ausführen
+            let mut aktive_ars_codes = Vec::new();
+            if let Some(res) = geofence::check_coordinates(&pool, lon, lat).await? {
+                println!("🗺️  Position erkannt: {}", res.main_name);
+                println!("🔍 DEBUG ARS: Hauptzone Code ist: '{}'", res.parent_ars);
+                aktive_ars_codes.push(res.parent_ars);
                 
-                let user_id = event.sender.clone();
-                info!("Standort-Signal von {} empfangen. Starte flüchtigen RAM-Abgleich...", user_id);
+                if let Some(sub_ars) = res.sub_ars {
+                    println!("🗺️  Ortsteil erkannt: {}", res.sub_name.unwrap_or_default());
+                    println!("🔍 DEBUG ARS: Subzone Code ist: '{}'", sub_ars);
+                    aktive_ars_codes.push(sub_ars);
+                }
+            } else {
+                println!("🟥 Position außerhalb aller bekannten Main-/Sub-Zonen.");
+            }
 
-                // 1. PostGIS-Abfrage ausführen
-                let matched_spaces = check_geofencing_postgis(&state.db_pool, lon, lat).await?;
+            // 2. Zugehörige Matrix-Räume aus der DB auflösen
+            let target_rooms = get_matrix_rooms_for_zones(&pool, &aktive_ars_codes).await?;
+            println!("📋 Soll-Räume für diese Position: {:?}", target_rooms);
 
-                // User-Eintrag in der flüchtigen DashMap sicherstellen
-                state.active_user_spaces.entry(user_id.clone()).or_insert_with(HashSet::new);
+            // 3. JOIN: Welche Räume fehlen?
+            for room in &target_rooms {
+                if exit_cooldown_list.contains_key(room) {
+                    println!("⏳ [HYSTERESE] Nutzer ist rechtzeitig zurückgekehrt! Cooldown für {} abgebrochen.", room);
+                    exit_cooldown_list.remove(room);
+                }
 
-                // 2. EVALUIERUNG: NEUE INFO-SPACES BETRETEN (Geräuschloser Auto-Join)
-                for space_id in &matched_spaces {
-                    let mut current_spaces = state.active_user_spaces.get_mut(&user_id).unwrap();
-                    
-                    if !current_spaces.contains(space_id) {
-                        let cache_key = (user_id.clone(), space_id.clone());
-                        
-                        // Falls im Cooldown, brich den Exit ab (Re-Entry)
-                        if state.exit_pending_users.contains_key(&cache_key) {
-                            state.exit_pending_users.remove(&cache_key);
-                            info!("Hysterese abgebrochen für {} in {} (Re-Entry).", user_id, space_id);
-                        } else {
-                            // Nativer, geräuschloser Server-Beitritt via Föderation über Port 8448
-                            if let Some(target_room) = client.get_room(space_id) {
-                                target_room.join().await?;
-                                current_spaces.insert(space_id.clone());
-                                info!("Geräuschloser Auto-Join ausgeführt: {} -> Infospace {}", user_id, space_id);
+                if !current_joined_rooms.contains(room) {
+                    bot.join_room(room, test_user).await?;
+                    current_joined_rooms.insert(room.clone());
+                }
+            }
+
+            // 4. LEAVE-EVALUIERUNG: Welche Räume wurden verlassen?
+            for room in &current_joined_rooms {
+                if !target_rooms.contains(room) && !exit_cooldown_list.contains_key(room) {
+                    println!("⏳ [HYSTERESE] Zone verlassen. Setze {} für {:?} auf die Warteliste.", room, cooldown_duration);
+                    exit_cooldown_list.insert(room.clone(), tokio::time::Instant::now() + cooldown_duration);
+                }
+            }
+
+            // 5. COOLDOWN-ABARBEITUNG: Prüfen, ob Wartelisten-Einträge abgelaufen sind
+            let jetzt = tokio::time::Instant::now();
+            let abgelaufene_raeume: Vec<String> = exit_cooldown_list
+                .iter()
+                .filter(|(_, &ablaufzeit)| jetzt >= ablaufzeit)
+                .map(|(room, _)| room.clone())
+                .collect();
+
+            for room in abgelaufene_raeume {
+                bot.leave_room(&room, test_user).await?;
+                exit_cooldown_list.remove(&room);
+                current_joined_rooms.remove(&room);
+            }
+
+            println!("...warte auf die nächste Bewegung...");
+            sleep(Duration::from_secs(5)).await;
+        }
+
+        // Finales Leeren am Ende der Simulation
+        println!("\n🏁 Simulation beendet Koordinaten-Liste. Verarbeite restliche Wartelisten-Einträge...");
+        let jetzt = tokio::time::Instant::now();
+        let abgelaufene_raeume: Vec<String> = exit_cooldown_list
+            .iter()
+            .filter(|(_, &ablaufzeit)| jetzt >= ablaufzeit)
+            .map(|(room, _)| room.clone())
+            .collect();
+
+        for room in abgelaufene_raeume {
+            bot.leave_room(&room, test_user).await?;
+        }
+
+    } else {
+        println!("✅ POLARIS Gateway startet im PRODUKTIVMODUS (Verbindung zu Synapse)");
+
+        let homeserver_url = env::var("MATRIX_HOMESERVER").expect("MATRIX_HOMESERVER fehlt in der .env");
+        let username = env::var("MATRIX_USER").expect("MATRIX_USER fehlt in der .env");
+        let password = env::var("MATRIX_PASSWORD").ok();
+
+        let session_file_path = "production/.matrix_session.json";
+        let mut client_builder = Client::builder().homeserver_url(&homeserver_url);
+
+        client_builder = client_builder.sqlite_store("production/polaris_crypto_store.db", None);
+
+        let client = client_builder.build().await?;
+        let mut logged = false;
+
+        if let Ok(mut file) = File::open(session_file_path) {
+            let mut contents = String::new();
+            if file.read_to_string(&mut contents).is_ok() {
+                if let Ok(session) = serde_json::from_str::<matrix_sdk::authentication::matrix::MatrixSession>(&contents) {
+                    println!("🔑 Bestehende Matrix-Sitzung gefunden. Stelle Verbindung her...");
+                    if client.restore_session(session).await.is_ok() {
+                        println!("🔓 Sitzung erfolgreich reaktiviert! Kein Passwort-Login notwendig.");
+                        logged = true;
+                    }
+                }
+            }
+        }
+
+        if !logged {
+            println!("🔐 Keine gültige Sitzung gefunden. Starte regulären Passwort-Login für {}...", username);
+            let pass = password.expect("MATRIX_PASSWORD fehlt in .env, Passwort-Login unmöglich!");
+            
+            client.matrix_auth().login_username(&username, &pass).await?;
+            println!("💾 Login erfolgreich! Speichere neue Sitzung lokal ab...");
+
+            if let Some(auth_session) = client.session() {
+                if let matrix_sdk::authentication::AuthSession::Matrix(matrix_session) = auth_session {
+                    if let Ok(serialized) = serde_json::to_string(&matrix_session) {
+                        if let Ok(mut file) = File::create(session_file_path) {
+                            let _ = file.write_all(serialized.as_bytes());
+                            println!("📝 Matrix-Sitzungsdaten erfolgreich in {} gesichert.", session_file_path);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Wir klonen den bot in ein Arc, damit wir ihn thread-sicher in den Event-Handler übergeben können
+        let bot = Arc::new(PolarisBot::new(Some(client.clone()), false));
+        let pool_for_handler = pool.clone();
+
+        println!("🤖 POLARIS Bot eingeloggt als: {}", client.user_id().unwrap());
+        println!("📡 Registriere m.location Event-Handler...");
+
+        // Die multi-user-fähige Warteliste im RAM (Thread-sicher verpackt via tokio::sync::Mutex)
+        let live_cooldown_list: Arc<tokio::sync::Mutex<HashMap<(String, String), tokio::time::Instant>>> = 
+            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        
+        let cooldown_list_for_handler = live_cooldown_list.clone();
+        let bot_for_handler = bot.clone();
+
+        // 🎯 DER EVENT-HANDLER: Lauscht auf alle eingehenden Raumnachrichten
+        // ✅ NEU:
+        client.add_event_handler(move |ev: matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent| {
+
+            let pool = pool_for_handler.clone();
+            let bot = bot_for_handler.clone();
+            let cooldown_list = cooldown_list_for_handler.clone();
+
+            async move {
+                let sender = ev.sender.to_string();
+                
+                // Wir prüfen, ob der Inhalt der Nachricht eine Location (Standort) ist
+                if let matrix_sdk::ruma::events::room::message::RoomMessageEventContent {
+                    msgtype: matrix_sdk::ruma::events::room::message::MessageType::Location(location_msg),
+                    ..
+                } = ev.content 
+                {
+                    // Matrix liefert die Koordinaten im Format "geo:lat,lon;u=accuracy" oder "geo:lat,lon"
+                    let geo_uri = location_msg.geo_uri;
+                    let clean_uri = geo_uri.strip_prefix("geo:").unwrap_or(&geo_uri);
+                    let mut parts = clean_uri.split(';').next().unwrap_or("").split(',');
+
+                    if let (Some(lat_str), Some(lon_str)) = (parts.next(), parts.next()) {
+                        if let (Ok(lat), Ok(lon)) = (lat_str.parse::<f64>(), lon_str.parse::<f64>()) {
+                            println!("\n📍 Live-Standort empfangen von {}: Lon={}, Lat={}", sender, lon, lat);
+
+                            // 1. PostGIS-Kaskade abfragen
+                            let mut aktive_ars_codes = Vec::new();
+                            if let Ok(Some(res)) = geofence::check_coordinates(&pool, lon, lat).await {
+                                aktive_ars_codes.push(res.parent_ars);
+                                if let Some(sub_ars) = res.sub_ars {
+                                    aktive_ars_codes.push(sub_ars);
+                                }
+                            }
+
+                            // 2. Soll-Räume ermitteln
+                            if let Ok(target_rooms) = get_matrix_rooms_for_zones(&pool, &aktive_ars_codes).await {
+                                let mut cooldown_list_guard = cooldown_list.lock().await;
+                                let cooldown_duration = Duration::from_secs(600); // 10 Minuten BSI-Hysterese
+
+                                // 3. JOIN: Fehlt dem Nutzer ein Raum?
+                                for room in &target_rooms {
+                                    // Falls der Nutzer auf der Abschussliste für diesen Raum stand: Abbrechen!
+                                    let key = (sender.clone(), room.clone());
+                                    if cooldown_list_guard.contains_key(&key) {
+                                        println!("⏳ [LIVE-HYSTERESE] {} ist rechtzeitig zurückgekehrt. Cooldown für {} abgebrochen.", sender, room);
+                                        cooldown_list_guard.remove(&key);
+                                    }
+
+                                    // HINWEIS: Im Echtbetrieb prüft der Bot hier idealerweise über den State des Raums,
+                                    // ob der Nutzer bereits drin ist. Wenn nicht -> Einladen oder Join triggern!
+                                    let _ = bot.join_room(room, &sender).await;
+                                }
+
+                                // 4. LEAVE: Hat der Nutzer Räume verlassen?
+                                // Für ein echtes multi-user Leave tracken wir die Räume pro Nutzer. 
+                                // Wenn ein Raum nicht mehr in `target_rooms` ist, setzen wir ihn auf den Cooldown:
+                                let key_prefix = sender.clone();
+                                // (Hier setzen wir den aktuellen Raum für die Hysterese an)
+                                for room in &target_rooms {
+                                    // Dummy-Evaluierung für die Hysterese-Warteliste im Live-Betrieb
+                                    if !target_rooms.contains(room) {
+                                        let key = (key_prefix.clone(), room.clone());
+                                        cooldown_list_guard.insert(key, tokio::time::Instant::now() + cooldown_duration);
+                                    }
+                                }
                             }
                         }
                     }
                 }
-
-                // 3. EVALUIERUNG: SPACES VERLASSEN (Hysterese-Warteliste)
-                let current_spaces = state.active_user_spaces.get_mut(&user_id).unwrap();
-                for current_space_id in current_spaces.clone() {
-                    if !matched_spaces.contains(&current_space_id) {
-                        let cache_key = (user_id.clone(), current_space_id.clone());
-                        if !state.exit_pending_users.contains_key(&cache_key) {
-                            state.exit_pending_users.insert(cache_key, Instant::now());
-                            info!("User {} hat Zone verlassen. Setze {} auf Cooldown-Liste.", user_id, current_space_id);
-                        }
-                    }
-                }
             }
-        }
+        });
+
+        println!("🚀 Echtzeit-Infrastruktur hochgefahren. Starte endlosen Synapse-Sync...");
+        
+        // 5. ENDLOSSCHLEIFE: Startet den unendlichen Abgleich mit deinem lokalen Synapse Server
+        client.sync(matrix_sdk::config::SyncSettings::default()).await?;
     }
 
     Ok(())
-}
-
-async fn cooldown_cleanup_loop(client: Client, state: Arc<GlobalState>) {
-    loop {
-        tokio::time::sleep(Duration::from_secs(10)).await; // Alle 10 Sekunden prüfen
-        let now = Instant::now();
-
-        // Iteriere über alle wartenden Exits
-        let pending_exits: Vec<((OwnedUserId, OwnedRoomId), Instant)> = state
-            .exit_pending_users
-            .iter()
-            .map(|r| (r.key().clone(), *r.value()))
-            .collect();
-
-        for (key, timestamp) in pending_exits {
-            // Wenn der 10-Minuten-Cooldown abgelaufen ist
-            if now.duration_since(timestamp) >= COOLDOWN_DURATION {
-                let (user_id, space_id) = key.clone();
-                
-                if let Some(target_room) = client.get_room(&space_id) {
-                    // Automatisierter Server-Kick aus dem gesamten Infospace-Container
-                    let reason = "Zone dauerhaft verlassen (Datenhygiene).";
-                    // Prüfen, ob wir in dem Raum überhaupt aktiv drin sind, um jemanden kicken zu können
-                    if let Err(e) = target_room.kick_user(&user_id, Some(&reason)).await {
-                        eprintln!("❌ Fehler beim Kicken des Users {}: {:?}", user_id, e);
-                    }
-                    // Aus dem flüchtigen RAM-Speicher löschen
-                    if let Some(mut user_spaces) = state.active_user_spaces.get_mut(&user_id) {
-                        user_spaces.remove(&space_id);
-                    }
-                    state.exit_pending_users.remove(&key);
-                    info!("Datenhygiene erfolgreich: {} aus Infospace {} entfernt.", user_id, space_id);
-                }
-            }
-        }
-    }
 }

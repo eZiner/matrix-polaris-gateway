@@ -5,8 +5,13 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1.35", features = ["full"] }
-matrix-sdk = { version = "0.7", features = ["e2e-encryption"] }
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "chrono"] }
+# Auf die moderne Version 0.19 anheben.
+# SQLite-Unterstützung heißt in neueren Versionen direkt "sqlite" statt "sqlite-crypto"
+# 1. SQLx komplett ohne Standard-Features laden und NUR Postgres aktivieren:
+sqlx = { version = "0.7", default-features = false, features = [ "runtime-tokio-native-tls", "postgres" ] }
+matrix-sdk = { version = "0.19", features = ["e2e-encryption", "sqlite"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 dashmap = "5.5" # Thread-sichere In-Memory-Hashmaps für den RAM-Check
@@ -15,6 +20,8 @@ clap = { version = "4.4", features = ["derive"] }
 dotenvy = "0.15"
 # Zwingt Rust, SQLite direkt aus dem Quellcode zu kompilieren (löst den Linker-Fehler)
 rusqlite = { version = "*", features = ["bundled"] }
+async-trait = "0.1"
+
 
 [[bin]]
 name = "test_geofence"
