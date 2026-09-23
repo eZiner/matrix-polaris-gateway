@@ -24,7 +24,7 @@ impl PolarisBot {
         Self { client, test_mode }
     }
 
-    /// Einheitliche Join-Methode, die intern zwischen Simulation und Prod unterscheidet
+    /// Einheitliche Join-Methode mit voll-dynamischem Föderations-Support
     async fn join_room(&self, room_id: &str, user_id: &str) -> Result<(), Box<dyn std::error::Error>> {
         if self.test_mode {
             println!("🛰️ [SIMULATION] API-Aufruf: Nutzer {} BETRITT Matrix-Raum {}", user_id, room_id);
@@ -32,8 +32,18 @@ impl PolarisBot {
         } else {
             println!("🚀 [PROD] Sende echten Join-Befehl für {} an Raum {}", user_id, room_id);
             if let Some(ref matrix_client) = self.client {
-                let ruma_room_id = <&matrix_sdk::ruma::RoomId>::try_from(room_id)?;
-                matrix_client.join_room_by_id(ruma_room_id).await?;
+                // Wir nutzen RoomOrAliasId, da das SDK hier flexibel IDs und Aliase schluckt
+                let ruma_room = <&matrix_sdk::ruma::RoomOrAliasId>::try_from(room_id)?;
+                
+                // 🌐 DYNAMISCHE FÖDERATION: Wir extrahieren den Servernamen direkt aus der ID.
+                // Fallback ist der Domain-Teil aus der User-ID (hinter dem Doppelpunkt).
+                let server_domain = room_id.split(':').nth(1)
+                    .unwrap_or_else(|| user_id.split(':').nth(1).unwrap_or("localhost"));
+                
+                let ruma_server_name = <matrix_sdk::ruma::OwnedServerName>::try_from(server_domain)?;
+
+                // Nutzt die korrekte SDK-Methode mit dem via-Server-Array als Routing-Knoten
+                matrix_client.join_room_by_id_or_alias(ruma_room, &[ruma_server_name]).await?;
             }
             Ok(())
         }
