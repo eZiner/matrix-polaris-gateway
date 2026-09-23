@@ -6,8 +6,23 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1.35", features = ["full"] }
 matrix-sdk = { version = "0.7", features = ["e2e-encryption"] }
-sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres", "chrono"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "chrono"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 dashmap = "5.5" # Thread-sichere In-Memory-Hashmaps für den RAM-Check
 anyhow = "1.0"
+clap = { version = "4.4", features = ["derive"] }
+dotenvy = "0.15"
+# Zwingt Rust, SQLite direkt aus dem Quellcode zu kompilieren (löst den Linker-Fehler)
+rusqlite = { version = "*", features = ["bundled"] }
+
+[[bin]]
+name = "test_geofence"
+path = "src/bin/test_geofence.rs"
+
+[lib]
+name = "matrix_polaris_gateway"
+path = "src/lib.rs"
+
+
+

@@ -1,4 +1,3 @@
 [workspace]
-members = [
-    "production"
-]
+members = ["production"]
+resolver = "2"

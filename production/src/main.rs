@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_variables, unused_imports)]
+pub mod geofence;
 use std::env;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -97,22 +99,29 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn check_geofencing_postgis(pool: &PgPool, lon: f64, lat: f64) -> Result<HashSet<OwnedRoomId>, sqlx::Error> {
-    // Die exakte Koordinate wird nach der Query im RAM nicht persistiert
-    let rows = sqlx::query!(
-        "SELECT matrix_space_id FROM polaris_infospaces \
-         WHERE ST_Contains(geom, ST_SetSRID(ST_MakePoint($1, $2), 4326));",
-        lon, lat
-    )
-    .fetch_all(pool)
-    .await?;
 
+async fn check_geofencing_postgis(pool: &sqlx::PgPool, lon: f64, lat: f64) -> Result<HashSet<OwnedRoomId>, sqlx::Error> {
     let mut spaces = HashSet::new();
-    for row in rows {
-        if let Ok(room_id) = RoomId::parse(row.matrix_space_id) {
+
+    // 1. Rufe unsere neue, zweistufige Kaskaden-Funktion auf
+    if let Some(result) = geofence::check_coordinates(pool, lon, lat).await? {
+        
+        // 2. Bestimme, welche ARS-ID wir nutzen (Subzone hat Vorrang vor Hauptzone)
+        let target_ars = match result.sub_ars {
+            Some(sub) => sub,
+            None => result.parent_ars,
+        };
+
+        // 3. Synthetisiere die simulierte Matrix-Raum-ID (z.B. "!03153005:goslar.de")
+        let simulated_room_str = format!("!{}:goslar.de", target_ars);
+
+        // 4. Parst den String in das vom Matrix-SDK geforderte Format und fügt es ins HashSet ein
+        if let Ok(room_id) = RoomId::parse(simulated_room_str) {
             spaces.insert(room_id);
         }
     }
+
+    // Liefert das HashSet zurück (entweder leer oder mit der ermittelten Raum-ID)
     Ok(spaces)
 }
 
