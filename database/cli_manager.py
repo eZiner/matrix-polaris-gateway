@@ -6,7 +6,7 @@ import psycopg2.extras  # <-- DIESE ZEILE HINZUFÜGEN!
 from dotenv import load_dotenv
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-env_path = os.path.join(os.path.dirname(script_dir), 'production', '.env')
+env_path = os.path.join(os.path.dirname(script_dir), 'services', 'matrix-gateway', '.env')
 load_dotenv(dotenv_path=env_path)
 
 DATABASE_URL = os.getenv("DATABASE_URL")

@@ -4,8 +4,7 @@ POLARIS ist ein offenes, dezentrales Kommunikations-Framework auf Basis des Matr
 
 * **Projekt-ID:** matrix-polaris
 * **Lizenz:** MIT-Lizenz (Open Source)
-* **Status:** ARCHITECTURAL SPECIFICATION & DATA PROTOTYPE
-* **Entwicklungsphase:** Phase 1 (Architektur-Entwurf & Geofencing-Validierung erfolgreich abgeschlossen. Das Datenmodell läuft; eine aktive Netzwerk-Kopplung an Matrix-Homeserver befindet sich in der Konzeptionsphase.)
+* **Status:** FUNCTIONAL MICROSERVICES ECOSYSTEM
 
 ---
 
@@ -19,54 +18,43 @@ Das System löst das Problem des ortsabhängigen Informationsflusses: Statt dass
 
 ## 2. Verzeichnisstruktur (Polyglot-Repository)
 
-Das Repository ist als Polyglot-Repository aufgebaut, um die schnelle Entwicklung von Ideen strikt vom hochperformanten Rechenzentrums-Betrieb zu trennen:
+Das POLARIS-Ökosystem ist modular aufgebaut, um eine strikte funktionale Trennung zwischen den Geodaten-Infrastrukturen und den eigentlichen Kommunikations-Diensten zu gewährleisten:
 
-* `/database` – **Der funktionsfähige Kern-Prototyp:** Enthält das vollständige relationale PostGIS-Datenbankschema, die Python-Pipelines für den automatisierten Datenimport aus amtlichen Quellen (BKG-GeoPackage) und OpenStreetMap (Overpass-API) sowie die interaktive Test-CLI zur Geofencing-Simulation.
-* `/prototype/` (Python) – **In Konzeption:** Optimiert für schnelle Experimente, Bot-Logik und lokale Schnittstellentests mit der Matrix-API.
-* `/production/` (Rust) – **Zielarchitektur:** Die zukünftige, speichersichere und hochperformante Produktionsversion für den echten Dauereinsatz in der kommunalen DMZ (parallele Verarbeitung via DashMap).
-* `/docs/` – **Zentrale technische Dokumentation:** Enthält die detaillierten Protokoll-Abläufe, Manifeste und Algorithmen-Spezifikationen.
-
----
-
-## 3. Technischer Kern: Das Geofencing-Modell
-
-Der bereits funktionstüchtige Daten-Prototyp setzt auf ein regionales 4-Tabellen-Hybridmodell in PostgreSQL/PostGIS. Um Abfragen im Bruchteil einer Millisekunde zu ermöglichen und Server-Ressourcen zu schonen, nutzt POLARIS zwei Kernparadigmen:
-
-1. **Zweistufige geografische Kaskade:** Bei einer Standort-Aktualisierung wird die Koordinate zuerst gegen die amtlichen Gemeindegrenzen (BKG) geprüft. Erst bei einem Treffer erfolgt der detaillierte Drilldown in die untergeordneten Ortsteile (OSM). PostGIS muss so niemals tausende bundesweite Polygone gleichzeitig berechnen.
-2. **In-Memory-Performance:** Der gesamte bereinigte Geodatensatz auf Gemeinde- und Ortsteilebene ist so schlank (ca. 250–300 MB), dass er vollständig im Arbeitsspeicher-Cache (`shared_buffers`) der Datenbank gehalten wird. Unterstützt durch räumliche GiST-Indizes liegen die Antwortzeiten stabil unter 0,2 Millisekunden.
-
----
-
-## 4. Entwicklungs-Roadmap
-
-Da sich das Projekt in einer frühen, evolutionären Phase befindet, sind die nächsten Meilensteine klar definiert:
-
-* [x] **Phase 1: Daten-Prototyping** (PostGIS-Schema, BKG/OSM-Importer, Kaskaden-Logik und CLI-Tester funktionsfähig).
-* [ ] **Phase 2: Die Matrix-Brücke & Gateway-Logik**
-  * Aufbau der eigentlichen Gateway-Komponente als Matrix Application Service (AS) zur Anbindung an einen Synapse-Testserver.
-  * Implementierung des geschwindigkeits-adaptiven Transit-Filters (Unterdrückung hyperlokaler Räume bei hoher Reisegeschwindigkeit).
-  * Implementierung des 10-minütigen Hysterese-Cooldowns über die Zustandstabelle `exit_pending_users`.
-  * Übersetzung der PostGIS-Ergebnisse in echte serverseitige `join`- und `leave`-Befehle via Masquerading.
+```text
+matrix-polaris-gateway/
+├── .github/workflows/      # 🚀 Zentrales CI/CD (unabhängige Pipelines für Services)
+├── database/               # 🗺️ PostGIS-Schema, Geodaten-Pipelines & Python-Importe
+│   ├── .venv/              # Isoliertes natives Linux-Environment (via uv verwaltet)
+│   ├── cli_manager.py      # Interaktiver PostGIS Polygon-Drilldown
+│   └── requirements.txt    # Abhängigkeiten (GeoPandas, SQLAlchemy, etc.)
+├── docs/                   # 📄 API-Spezifikationen, Architektur-Blueprints & Handbücher
+├── services/               # ⚙️ DIE PRODUKTIVEN DIENSTE
+│   ├── matrix-gateway/     # 🦀 Core-Service: Matrix Application Service (Rust AS)
+│   │   ├── src/            # Rust Quellcode (Geofencing- & Hysterese-Logik)
+│   │   ├── Cargo.toml      # Rust Abhängigkeiten & Workspace-Konfiguration
+│   │   └── .env            # Zentrale Gateway-Konfigurationsdatei
+│   ├── admin-api/          # ⏳ Platzhalter: REST-API für die Verwaltung (Go/Node)
+│   └── admin-web/          # ⏳ Platzhalter: Webportal für Krisenstäbe (TS/React)
+├── Cargo.toml              # 🛠️ Globales Rust-Workspace-Manifest (Root-Ebene)
+├── docker-compose.yml      # 🐳 Lokaler Orchestrator (PostGIS, Synapse & Gateway)
+└── README.md               # 📖 Der zentrale Einstiegspunkt
+```
 
 ---
 
-## 5. Inbetriebnahme & Entwicklungsstand (Lokales Prototyping)
+## 3. Technischer Kern & Geofencing
 
-Derzeit ist das Geofencing-Datenmodell (`/database`) voll funktionsfähig implementiert. Die verschiedenen softwareseitigen Entwicklungsebenen gliedern sich wie folgt:
-
-### 🐍 1. Prototyping-Ebene (Python)
-
-Wird in der nächsten Ausbaustufe genutzt, um die PostGIS-Engine über Bibliotheken wie `matrix-nio` an einen Test-Homeserver anzubinden.
-
-* Eine ausführliche Anleitung zur Einrichtung der PostGIS-Datenbank, dem Bezug der amtlichen BKG-Daten und dem Troubleshooting unter Windows (WSL1) findest du im dedizierten Sub-Readme: [**database/README.md**](./database/README.md).
-
-### 🦀 2. Produktiver Betrieb (Rust)
-
-Das geplante Zielbild für den echten Einsatz im kommunalen Rechenzentrum. Läuft zukünftig dank Multi-Stage-Docker-Build als minimales, hochsicheres Linux-Image und bietet maximale Thread-Sicherheit bei Massen-Zugriffen.
+Das System nutzt eine zweistufige geografische Kaskade in PostgreSQL/PostGIS, eine unverschlüsselte Zwei-Kanal-Strategie (Space-Shifting) zur Entlastung bei Großveranstaltungen und speicheroptimierte In-Memory-Performance.
 
 ---
 
-## 6. Datenschutz & Security (Privacy by Design)
+## 4. Roadmap & Inbetriebnahme
+
+Das System nutzt eine zweistufige geografische Kaskade in PostgreSQL/PostGIS, eine unverschlüsselte Zwei-Kanal-Strategie (Space-Shifting) zur Entlastung bei Großveranstaltungen und speicheroptimierte In-Memory-Performance.
+
+---
+
+## 5. Datenschutz & Security (Privacy by Design)
 
 * **Keine Bewegungsprofile:** Der mathematische PostGIS-Abgleich (`ST_Contains`) erfolgt ausschließlich flüchtig im Arbeitsspeicher (RAM). Die exakten GPS-Daten werden sofort nach der Raum-ID-Ermittlung verworfen und nicht dauerhaft protokolliert.
 * **Datenhygiene (Hysterese-Schutz):** Verlässt ein Bürger eine Zone, greift eine 10-minütige Karenzzeit (gespeichert in `exit_pending_users`). Erst danach erfolgt der automatische Austritt. Der Raum verschwindet vom Smartphone, was „Gruppenleichen“ im Messenger verhindert.

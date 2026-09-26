@@ -29,7 +29,7 @@ def create_robust_session():
 # 1. SETUP & ENV-LADEN
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
-env_path = os.path.join(project_root, 'production', '.env')
+env_path = os.path.join(os.path.dirname(project_root), 'services', 'matrix-gateway', '.env')
 load_dotenv(dotenv_path=env_path)
 
 DATABASE_URL = os.getenv("DATABASE_URL")

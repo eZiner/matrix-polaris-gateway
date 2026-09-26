@@ -218,7 +218,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Rust-Build-Ordner ignorieren (sehr wichtig, sonst lädst du Gigabyte an temporären Daten hoch!)
-production/target/
+services/matrix-gateway/target/
 **/*.rs.bk
 
 # SQLx-Cache (nur hochladen, wenn du den Offline-Modus erzwingst)
@@ -249,14 +249,14 @@ database/obsolete/
 
 # Lokale, verschlüsselte Matrix-Sitzungsdaten (Enthält dein Auth-Token!)
 .matrix_session.json
-production/.matrix_session.json
+services/matrix-gateway/.matrix_session.json
 
 # Lokale SQLite-Datenbank für die Ende-zu-Ende-Verschlüsselung (E2EE)
 *.db
 *.db-journal
 polaris_crypto_store.db
-production/polaris_crypto_store.db
+services/matrix-gateway/polaris_crypto_store.db
 
 # Allgemeine Umgebungsvariablen absichern
 .env
-production/.env
+services/matrix-gateway/.env

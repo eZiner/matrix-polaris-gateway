@@ -21,7 +21,7 @@ def main():
     # 1. Dynamische Pfad-Auflösung für die .env-Datei
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
-    env_path = os.path.join(project_root, 'production', '.env')
+    env_path = os.path.join(os.path.dirname(project_root), 'services', 'matrix-gateway', '.env')
 
     if not os.path.exists(env_path):
         print(f"❌ Fehler: .env-Datei nicht gefunden unter {env_path}")

@@ -40,7 +40,7 @@ services:
   # 3. DAS RUST GEOFENCE GATEWAY
   polaris-gateway:
     build:
-      context: ./production
+      context: ./services/matrix-gateway
       dockerfile: Dockerfile
     container_name: polaris-gateway
     restart: always

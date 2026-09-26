@@ -15,3 +15,6 @@ urllib3>=2.0.0
 
 # Laden der .env Konfigurationsdatei
 python-dotenv>=1.0.0
+
+# Datenbank-Verbindungstoolkit für schnellen GIS-Datenimport
+sqlalchemy>=2.0.38

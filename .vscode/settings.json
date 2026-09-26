@@ -1,9 +1,9 @@
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/prototype/.venv/Scripts/python.exe",
+    "python.defaultInterpreterPath": "${workspaceFolder}/database/.venv/bin/python",
     "python.analysis.extraPaths": [
-        "${workspaceFolder}/prototype/.venv/Lib/site-packages"
+        "${workspaceFolder}/database/.venv/lib/python3.10/site-packages"
     ],
-    "python.terminal.useEnvFile": true,
+    "python.terminal.activateEnvInCurrentTerminal": true,
     "sqltools.connections": [
         {
             "ssh": "Disabled",
@@ -15,5 +15,7 @@
             "database": "polaris_geo",
             "username": "polaris"
         }
-    ]
+    ],
+    "python.terminal.executeInFileDir": true,
+    "python.terminal.useEnvFile": true
 }
