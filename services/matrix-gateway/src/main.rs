@@ -1,12 +1,12 @@
+use matrix_sdk::Client;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::collections::{HashSet, HashMap};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
-use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
-use matrix_sdk::Client;
 
 // Importiert dein bereits erfolgreich getestetes Geofence-Modul
 use matrix_polaris_gateway::geofence;
@@ -25,43 +25,71 @@ impl PolarisBot {
     }
 
     /// Einheitliche Join-Methode mit voll-dynamischem Föderations-Support
-    async fn join_room(&self, room_id: &str, user_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn join_room(
+        &self,
+        room_id: &str,
+        user_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if self.test_mode {
-            println!("🛰️ [SIMULATION] API-Aufruf: Nutzer {} BETRITT Matrix-Raum {}", user_id, room_id);
+            println!(
+                "🛰️ [SIMULATION] API-Aufruf: Nutzer {} BETRITT Matrix-Raum {}",
+                user_id, room_id
+            );
             Ok(())
         } else {
-            println!("🚀 [PROD] Sende echten Join-Befehl für {} an Raum {}", user_id, room_id);
+            println!(
+                "🚀 [PROD] Sende echten Join-Befehl für {} an Raum {}",
+                user_id, room_id
+            );
             if let Some(ref matrix_client) = self.client {
                 // Wir nutzen RoomOrAliasId, da das SDK hier flexibel IDs und Aliase schluckt
                 let ruma_room = <&matrix_sdk::ruma::RoomOrAliasId>::try_from(room_id)?;
-                
+
                 // 🌐 DYNAMISCHE FÖDERATION: Wir extrahieren den Servernamen direkt aus der ID.
                 // Fallback ist der Domain-Teil aus der User-ID (hinter dem Doppelpunkt).
-                let server_domain = room_id.split(':').nth(1)
+                let server_domain = room_id
+                    .split(':')
+                    .nth(1)
                     .unwrap_or_else(|| user_id.split(':').nth(1).unwrap_or("localhost"));
-                
-                let ruma_server_name = <matrix_sdk::ruma::OwnedServerName>::try_from(server_domain)?;
+
+                let ruma_server_name =
+                    <matrix_sdk::ruma::OwnedServerName>::try_from(server_domain)?;
 
                 // Nutzt die korrekte SDK-Methode mit dem via-Server-Array als Routing-Knoten
-                matrix_client.join_room_by_id_or_alias(ruma_room, &[ruma_server_name]).await?;
+                matrix_client
+                    .join_room_by_id_or_alias(ruma_room, &[ruma_server_name])
+                    .await?;
             }
             Ok(())
         }
     }
 
     /// Einheitliche Leave-Methode, die intern zwischen Simulation und Prod unterscheidet
-    async fn leave_room(&self, room_id: &str, user_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn leave_room(
+        &self,
+        room_id: &str,
+        user_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if self.test_mode {
-            println!("🛰️ [SIMULATION] API-Aufruf: Nutzer {} VERLÄSST Matrix-Raum {}", user_id, room_id);
+            println!(
+                "🛰️ [SIMULATION] API-Aufruf: Nutzer {} VERLÄSST Matrix-Raum {}",
+                user_id, room_id
+            );
             Ok(())
         } else {
-            println!("🚀 [PROD] Sende echten Leave-Befehl für {} an Raum {}", user_id, room_id);
+            println!(
+                "🚀 [PROD] Sende echten Leave-Befehl für {} an Raum {}",
+                user_id, room_id
+            );
             if let Some(ref matrix_client) = self.client {
                 let ruma_room_id = <&matrix_sdk::ruma::RoomId>::try_from(room_id)?;
                 if let Some(room) = matrix_client.get_room(ruma_room_id) {
                     room.leave().await?;
                 } else {
-                    println!("⚠️ [PROD] Bot war gar nicht in Raum {}, Leave übersprungen.", room_id);
+                    println!(
+                        "⚠️ [PROD] Bot war gar nicht in Raum {}, Leave übersprungen.",
+                        room_id
+                    );
                 }
             }
             Ok(())
@@ -70,26 +98,31 @@ impl PolarisBot {
 }
 
 /// Holt alle Matrix-Raum-IDs aus der DB, die zu einer Haupt- oder Subzone gehören
-async fn get_matrix_rooms_for_zones(pool: &PgPool, ars_codes: &[String]) -> Result<HashSet<String>, sqlx::Error> {
+async fn get_matrix_rooms_for_zones(
+    pool: &PgPool,
+    ars_codes: &[String],
+) -> Result<HashSet<String>, sqlx::Error> {
     if ars_codes.is_empty() {
         return Ok(HashSet::new());
     }
 
     // Wir bauen die Abfrage über den SQLx-QueryBuilder dynamisch auf: WHERE ars_code IN ($1, $2, ...)
-    let mut query_builder = sqlx::QueryBuilder::new("SELECT matrix_space_id FROM public.polaris_spaces WHERE ars_code IN (");
-    
+    let mut query_builder = sqlx::QueryBuilder::new(
+        "SELECT matrix_space_id FROM public.polaris_spaces WHERE ars_code IN (",
+    );
+
     let mut separated = query_builder.separated(", ");
     for code in ars_codes {
         separated.push_bind(code);
     }
     query_builder.push(")");
 
-    let rows: Vec<String> = query_builder
-        .build_query_scalar()
-        .fetch_all(pool)
-        .await?;
+    let rows: Vec<String> = query_builder.build_query_scalar().fetch_all(pool).await?;
 
-    println!("🔍 DB-Query lieferte {} Zeilen aus polaris_spaces zurück.", rows.len());
+    println!(
+        "🔍 DB-Query lieferte {} Zeilen aus polaris_spaces zurück.",
+        rows.len()
+    );
 
     Ok(rows.into_iter().collect())
 }
@@ -97,7 +130,10 @@ async fn get_matrix_rooms_for_zones(pool: &PgPool, ars_codes: &[String]) -> Resu
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Debug: Zeige uns, wo Cargo das Programm wirklich startet
     if let Ok(current_dir) = env::current_dir() {
-        println!("🔍 POLARIS Debug: Arbeitsverzeichnis ist: {}", current_dir.display());
+        println!(
+            "🔍 POLARIS Debug: Arbeitsverzeichnis ist: {}",
+            current_dir.display()
+        );
     }
 
     // Versuche an den verschiedenen Orten nach der .env zu suchen
@@ -110,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("❌ POLARIS WARNUNG: Keine .env-Datei an den Standardorten gefunden!");
     }
-    
+
     // Testmodus über Umgebungsvariable auslesen (z.B. POLARIS_TEST_MODE=true)
     let test_mode: bool = env::var("POLARIS_TEST_MODE")
         .unwrap_or_else(|_| "false".to_string())
@@ -118,7 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(false);
 
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL fehlt in der .env");
-    
+
     // Verbindung zur PostgreSQL-Datenbank aufbauen
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -134,13 +170,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bot = PolarisBot::new(None, true);
 
         println!("\n--- Starte Bewegungssimulation ---");
-        
+
         // Simulations-Szenario: Nutzer wechselt die Positionen
         let test_koordinaten = vec![
             (10.42, 51.90), // 1. Punkt: In Goslar (Nutzer betritt den Raum)
             (10.33, 51.81), // 2. Punkt: Clausthal (Nutzer verlässt Goslar -> Cooldown startet!)
             (10.42, 51.90), // 3. Punkt: Schnell zurück nach Goslar (Abbruch des Cooldowns!)
-            (9.99,  50.00), // 4. Punkt: Weg nach Arnstein (Cooldown startet erneut und läuft ab)
+            (9.99, 50.00),  // 4. Punkt: Weg nach Arnstein (Cooldown startet erneut und läuft ab)
         ];
 
         let mut current_joined_rooms: HashSet<String> = HashSet::new();
@@ -158,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("🗺️  Position erkannt: {}", res.main_name);
                 println!("🔍 DEBUG ARS: Hauptzone Code ist: '{}'", res.parent_ars);
                 aktive_ars_codes.push(res.parent_ars);
-                
+
                 if let Some(sub_ars) = res.sub_ars {
                     println!("🗺️  Ortsteil erkannt: {}", res.sub_name.unwrap_or_default());
                     println!("🔍 DEBUG ARS: Subzone Code ist: '{}'", sub_ars);
@@ -188,8 +224,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // 4. LEAVE-EVALUIERUNG: Welche Räume wurden verlassen?
             for room in &current_joined_rooms {
                 if !target_rooms.contains(room) && !exit_cooldown_list.contains_key(room) {
-                    println!("⏳ [HYSTERESE] Zone verlassen. Setze {} für {:?} auf die Warteliste.", room, cooldown_duration);
-                    exit_cooldown_list.insert(room.clone(), tokio::time::Instant::now() + cooldown_duration);
+                    println!(
+                        "⏳ [HYSTERESE] Zone verlassen. Setze {} für {:?} auf die Warteliste.",
+                        room, cooldown_duration
+                    );
+                    exit_cooldown_list.insert(
+                        room.clone(),
+                        tokio::time::Instant::now() + cooldown_duration,
+                    );
                 }
             }
 
@@ -223,11 +265,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for room in abgelaufene_raeume {
             bot.leave_room(&room, test_user).await?;
         }
-
     } else {
         println!("✅ POLARIS Gateway startet im PRODUKTIVMODUS (Verbindung zu Synapse)");
 
-        let homeserver_url = env::var("MATRIX_HOMESERVER").expect("MATRIX_HOMESERVER fehlt in der .env");
+        let homeserver_url =
+            env::var("MATRIX_HOMESERVER").expect("MATRIX_HOMESERVER fehlt in der .env");
         let username = env::var("MATRIX_USER").expect("MATRIX_USER fehlt in der .env");
         let password = env::var("MATRIX_PASSWORD").ok();
 
@@ -242,10 +284,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(mut file) = File::open(session_file_path) {
             let mut contents = String::new();
             if file.read_to_string(&mut contents).is_ok() {
-                if let Ok(session) = serde_json::from_str::<matrix_sdk::authentication::matrix::MatrixSession>(&contents) {
+                if let Ok(session) = serde_json::from_str::<
+                    matrix_sdk::authentication::matrix::MatrixSession,
+                >(&contents)
+                {
                     println!("🔑 Bestehende Matrix-Sitzung gefunden. Stelle Verbindung her...");
                     if client.restore_session(session).await.is_ok() {
-                        println!("🔓 Sitzung erfolgreich reaktiviert! Kein Passwort-Login notwendig.");
+                        println!(
+                            "🔓 Sitzung erfolgreich reaktiviert! Kein Passwort-Login notwendig."
+                        );
                         logged = true;
                     }
                 }
@@ -253,18 +300,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if !logged {
-            println!("🔐 Keine gültige Sitzung gefunden. Starte regulären Passwort-Login für {}...", username);
+            println!(
+                "🔐 Keine gültige Sitzung gefunden. Starte regulären Passwort-Login für {}...",
+                username
+            );
             let pass = password.expect("MATRIX_PASSWORD fehlt in .env, Passwort-Login unmöglich!");
-            
-            client.matrix_auth().login_username(&username, &pass).await?;
+
+            client
+                .matrix_auth()
+                .login_username(&username, &pass)
+                .await?;
             println!("💾 Login erfolgreich! Speichere neue Sitzung lokal ab...");
 
             if let Some(auth_session) = client.session() {
-                if let matrix_sdk::authentication::AuthSession::Matrix(matrix_session) = auth_session {
+                if let matrix_sdk::authentication::AuthSession::Matrix(matrix_session) =
+                    auth_session
+                {
                     if let Ok(serialized) = serde_json::to_string(&matrix_session) {
                         if let Ok(mut file) = File::create(session_file_path) {
                             let _ = file.write_all(serialized.as_bytes());
-                            println!("📝 Matrix-Sitzungsdaten erfolgreich in {} gesichert.", session_file_path);
+                            println!(
+                                "📝 Matrix-Sitzungsdaten erfolgreich in {} gesichert.",
+                                session_file_path
+                            );
                         }
                     }
                 }
@@ -275,13 +333,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bot = Arc::new(PolarisBot::new(Some(client.clone()), false));
         let pool_for_handler = pool.clone();
 
-        println!("🤖 POLARIS Bot eingeloggt als: {}", client.user_id().unwrap());
+        println!(
+            "🤖 POLARIS Bot eingeloggt als: {}",
+            client.user_id().unwrap()
+        );
         println!("📡 Registriere m.location Event-Handler...");
 
         // Die multi-user-fähige Warteliste im RAM (Thread-sicher verpackt via tokio::sync::Mutex)
-        let live_cooldown_list: Arc<tokio::sync::Mutex<HashMap<(String, String), tokio::time::Instant>>> = 
-            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-        
+        let live_cooldown_list: Arc<
+            tokio::sync::Mutex<HashMap<(String, String), tokio::time::Instant>>,
+        > = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
         let cooldown_list_for_handler = live_cooldown_list.clone();
         let bot_for_handler = bot.clone();
 
@@ -295,12 +357,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             async move {
                 let sender = ev.sender.to_string();
-                
+
                 // Wir prüfen, ob der Inhalt der Nachricht eine Location (Standort) ist
                 if let matrix_sdk::ruma::events::room::message::RoomMessageEventContent {
                     msgtype: matrix_sdk::ruma::events::room::message::MessageType::Location(location_msg),
                     ..
-                } = ev.content 
+                } = ev.content
                 {
                     // Matrix liefert die Koordinaten im Format "geo:lat,lon;u=accuracy" oder "geo:lat,lon"
                     let geo_uri = location_msg.geo_uri;
@@ -359,9 +421,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         println!("🚀 Echtzeit-Infrastruktur hochgefahren. Starte endlosen Synapse-Sync...");
-        
+
         // 5. ENDLOSSCHLEIFE: Startet den unendlichen Abgleich mit deinem lokalen Synapse Server
-        client.sync(matrix_sdk::config::SyncSettings::default()).await?;
+        client
+            .sync(matrix_sdk::config::SyncSettings::default())
+            .await?;
     }
 
     Ok(())

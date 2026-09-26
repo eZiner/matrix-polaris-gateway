@@ -15,7 +15,6 @@ pub async fn check_coordinates(
     lon: f64,
     lat: f64,
 ) -> Result<Option<GeofenceResult>, sqlx::Error> {
-    
     // Stufe 1: Hauptzone (Gemeinde) ermitteln
     let main_zone_query = r#"
         SELECT ars_code, zone_name 
@@ -30,7 +29,6 @@ pub async fn check_coordinates(
         .await?;
 
     if let Some((parent_ars, main_name)) = main_zone {
-        
         // Stufe 2: Gezielter Drilldown in die Subzonen dieser Gemeinde
         let sub_zone_query = r#"
             SELECT ars_code, zone_name 

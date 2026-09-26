@@ -23,8 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📍 Teste Koordinate: Lon={}, Lat={}", args.lon, args.lat);
 
-    let database_url = env::var("DATABASE_URL")
-        .expect("DATABASE_URL fehlt");
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL fehlt");
 
     let pool = PgPoolOptions::new()
         .max_connections(2)
