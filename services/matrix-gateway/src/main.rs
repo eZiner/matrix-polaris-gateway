@@ -312,18 +312,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
             println!("💾 Login erfolgreich! Speichere neue Sitzung lokal ab...");
 
-            if let Some(auth_session) = client.session() {
-                if let matrix_sdk::authentication::AuthSession::Matrix(matrix_session) =
-                    auth_session
-                {
-                    if let Ok(serialized) = serde_json::to_string(&matrix_session) {
-                        if let Ok(mut file) = File::create(session_file_path) {
-                            let _ = file.write_all(serialized.as_bytes());
-                            println!(
-                                "📝 Matrix-Sitzungsdaten erfolgreich in {} gesichert.",
-                                session_file_path
-                            );
-                        }
+            if let Some(matrix_sdk::authentication::AuthSession::Matrix(matrix_session)) = client.session() {
+                if let Ok(serialized) = serde_json::to_string(&matrix_session) {
+                    if let Ok(mut file) = File::create(session_file_path) {
+                        let _ = file.write_all(serialized.as_bytes());
+                        println!(
+                            "📝 Matrix-Sitzungsdaten erfolgreich in {} gesichert.",
+                            session_file_path
+                        );
                     }
                 }
             }
