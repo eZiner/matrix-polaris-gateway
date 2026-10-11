@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Rathaus Schadensmeldung</title>
+    <!-- Einbindung der offiziellen Matrix-Widget-API -->
+    <script src="https://unpkg.com"></script>
+    <style>
+        body { font-family: sans-serif; padding: 15px; background: #fff; color: #333; margin: 0; }
+        .form-group { margin-bottom: 12px; }
+        label { display: block; font-weight: bold; margin-bottom: 4px; font-size: 14px; }
+        input, select, textarea { width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+        button { background: #007acd; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 14px; width: 100%; font-weight: bold; }
+        button:hover { background: #00599a; }
+    </style>
+</head>
+<body>
+
+    <h4 style="margin-top: 0; margin-bottom: 10px; color: #007acd;">🏛️ Schaden online melden</h4>
+    
+    <div id="form-container">
+        <div class="form-group">
+            <label for="category">Art des Schadens:</label>
+            <select id="category">
+                <option value="Schlagloch">🕳️ Schlagloch / Straßenschaden</option>
+                <option value="Laterne">💡 Defekte Straßenbeleuchtung</option>
+                <option value="Müll">🗑️ Wilde Müllkippe</option>
+                <option value="Sonstiges">🛠️ Sonstiges</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="location">Ort / Adresse:</label>
+            <input type="text" id="location" placeholder="z.B. Am Badstubenberg 11">
+        </div>
+
+        <div class="form-group">
+            <label for="description">Beschreibung:</label>
+            <textarea id="description" rows="2" placeholder="Details..."></textarea>
+        </div>
+
+        <button id="submit-btn" onclick="sendReport()">Meldung absenden</button>
+    </div>
+
+    <script>
+        // Widget-API für das IFrame initialisieren
+        const widgetApi = new matrixWidgetApi.WidgetApi();
+        // Die Berechtigung anfordern, Events (Nachrichten) in den Raum zu posten
+        widgetApi.requestCapabilities(['org.matrix.msc2762.send.event']);
+        widgetApi.start();
+
+        function sendReport() {
+            const category = document.getElementById('category').value;
+            const location = document.getElementById('location').value;
+            const description = document.getElementById('description').value;
+
+            if (!location.trim()) {
+                alert("Bitte gib einen Ort an!");
+                return;
+            }
+
+            // Der strukturierte Textblock für deine CSV-Datenbank
+            const textBody = `[Formular-Daten]\nTyp: ${category}\nOrt: ${location}\nDetails: ${description}`;
+
+            // Die Widget-API schiebt die Daten direkt verschlüsselt über den Client in den Raum
+            widgetApi.sendRoomEvent('m.room.message', {
+                msgtype: 'm.text',
+                body: textBody
+            }).then(() => {
+                document.body.innerHTML = "<h4 style='color: green; text-align: center; margin-top: 20px;'>✅ Meldung gesendet!</h4><p style='font-size: 12px; text-align: center;'>Das Widget-Fenster kann jetzt oben wieder geschlossen werden.</p>";
+            }).catch(err => {
+                alert("Fehler beim Senden über Element: " + err);
+            });
+        }
+    </script>
+</body>
+</html>

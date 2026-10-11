@@ -1,6 +1,4 @@
-﻿version: '3.8'
-
-services:
+﻿services:
   # 1. POSTGIS-DATENBANK-DIENST (Die geografische Basis)
   polaris-db:
     image: postgis/postgis:16-3.4
@@ -13,7 +11,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - polaris_postgres_data:/var/lib/postgresql/data
+      - ./postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s
@@ -27,8 +25,11 @@ services:
     restart: always
     ports:
       - "8008:8008"
+      - "8000:8000"
     volumes:
-      - ./synapse_data:/data
+      - ./synapse-data:/data
+      # Mappt den gesamten www-Ordner in das statische Webverzeichnis von Synapse
+      - /srv/docker/polaris/www:/usr/local/lib/python3.13/site-packages/synapse/static
     environment:
       - SYNAPSE_SERVER_NAME=${MATRIX_SERVER_NAME}
       - SYNAPSE_REPORT_STATS=no
@@ -46,12 +47,11 @@ services:
     restart: always
     env_file:
       - .env
+    volumes:
+      # 🎯 DAS ORDNUNGS-GEHEIMNIS: Spiegelt die EINZIGE Haupt-.env direkt in das App-Verzeichnis des Bots!
+      - ./.env:/app/.env:ro
     depends_on:
       polaris-db:
         condition: service_healthy
       synapse:
         condition: service_started
-        
-volumes:
-  polaris_postgres_data:
-    driver: local

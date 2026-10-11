@@ -4,19 +4,22 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
-# 1. Setup & .env aus dem 'production'-Ordner laden
+# 1. Setup & zentrale .env laden
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
-env_path = os.path.join(os.path.dirname(project_root), 'services', 'matrix-gateway', '.env')
+env_path = os.path.join(project_root, '.env')
 load_dotenv(dotenv_path=env_path)
 
 try:
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-    # Wir nutzen hier den Standard-Cursor und greifen über Indizes zu,
-    # um jegliche Dict- und Attribut-Fehler unter Windows/WSL zu eliminieren!
+    db_url = os.getenv("DATABASE_URL")
+    # 🎯 ÜBERSETZER: Biegt den Docker-Host für das lokale Skript auf localhost um
+    if db_url and "@polaris-db" in db_url:
+        db_url = db_url.replace("@polaris-db", "@127.0.0.1")
+        
+    conn = psycopg2.connect(db_url)
     cur = conn.cursor()
 except Exception as e:
-    print(f"❌ DB-Fehler: {e}")
+    print( f"❌ DB-Fehler: {e}")
     sys.exit(1)
 
 print("="*60)

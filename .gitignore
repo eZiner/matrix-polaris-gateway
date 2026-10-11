@@ -144,6 +144,12 @@ rabbitmq-data/
 # ActiveMQ
 activemq-data/
 
+# Synapse
+synapse-data/
+
+# Postgres
+postgres-data/
+
 # SageMath parsed files
 *.sage.py
 
@@ -260,3 +266,10 @@ services/matrix-gateway/polaris_crypto_store.db
 # Allgemeine Umgebungsvariablen absichern
 .env
 services/matrix-gateway/.env
+
+# SENSRELE DATEN & KRYPTO-SCHLÜSSEL (NIEMALS PUSHEN!)
+bot_credentials.txt
+bot_store/
+
+# Test-Daten ausschließen
+*.csv

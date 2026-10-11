@@ -18,11 +18,15 @@ from dotenv import load_dotenv
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
-env_path = os.path.join(os.path.dirname(project_root), 'services', 'matrix-gateway', '.env')
+# 🎯 KORREKTUR: Zeigt direkt auf die zentrale .env im Hauptordner
+env_path = os.path.join(project_root, '.env')
 load_dotenv(dotenv_path=env_path)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
+db_url = os.getenv("DATABASE_URL")
+# 🎯 ÜBERSETZER: Biegt den Docker-Host für das lokale Skript auf localhost um
+if db_url and "@polaris-db" in db_url:
+    db_url = db_url.replace("@polaris-db", "@127.0.0.1")
+if not db_url:
     print("❌ FEHLER: DATABASE_URL fehlt in der .env!", file=sys.stderr)
     sys.exit(1)
 
@@ -34,7 +38,7 @@ HEADERS = {
 def sync_missing_multipolygons():
     """Holt die echten Grenzpolygone für Relationen aus OSM und schließt die NULL-Lücken [1.21]."""
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(db_url)
         cur = conn.cursor()
     except Exception as e:
         print(f"❌ DB-Verbindungsfehler: {e}")

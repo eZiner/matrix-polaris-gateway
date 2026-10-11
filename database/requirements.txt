@@ -6,8 +6,11 @@
 geopandas>=0.14.0
 shapely>=2.0.0
 
-# PostgreSQL/PostGIS Datenbank-Treiber
-psycopg2-binary>=2.9.0
+# PostGIS-Erweiterung für SQLAlchemy/GeoPandas-Exporte
+geoalchemy2>=0.14.0
+
+# Moderner PostgreSQL/PostGIS Treiber (Psycopg 3) für SQLAlchemy 2.x
+psycopg[binary]>=3.1.0
 
 # API-Kommunikation und Retry-Sicherungen (Overpass API)
 requests>=2.31.0
@@ -18,3 +21,6 @@ python-dotenv>=1.0.0
 
 # Datenbank-Verbindungstoolkit für schnellen GIS-Datenimport
 sqlalchemy>=2.0.38
+
+# Matrix-Server API
+matrix-nio[e2e]>=0.26.0,<0.27.0

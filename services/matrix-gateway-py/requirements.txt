@@ -1,0 +1,15 @@
+# ==============================================================================
+# POLARIS GATEWAY PIPELINE - PYTHON DEPENDENCIES
+# ==============================================================================
+
+# Matrix-Protokoll & Krypto-Verschlüsselung
+matrix-nio[e2e]>=0.26.0,<0.27.0
+
+# Sicherer Zugriff auf Umgebungsvariablen aus der .env
+python-dotenv>=1.0.0
+
+# Leichtgewichtiger, nativer PostgreSQL/PostGIS Treiber (Version 2)
+psycopg2-binary>=2.9.0
+
+# Asynchrone HTTP-Kommunikation für Krypto-Syncs
+aiohttp>=3.9.0

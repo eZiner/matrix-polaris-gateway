@@ -1,0 +1,7 @@
+# 🚫 Riesige Datenmengen vom Docker-Build ausschließen
+target/
+database/
+matrix-data/
+synapse_data/
+.git/
+*.7z

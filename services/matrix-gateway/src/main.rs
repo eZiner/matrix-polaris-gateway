@@ -270,8 +270,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let homeserver_url =
             env::var("MATRIX_HOMESERVER").expect("MATRIX_HOMESERVER fehlt in der .env");
-        let username = env::var("MATRIX_USER").expect("MATRIX_USER fehlt in der .env");
-        let password = env::var("MATRIX_PASSWORD").ok();
+        let username = env::var("MATRIX_BOT_USER").expect("MATRIX_BOT_USER fehlt in der .env");
+        let password = env::var("MATRIX_BOT_PASSWORD").ok();
 
         let session_file_path = "production/.matrix_session.json";
         let mut client_builder = Client::builder().homeserver_url(&homeserver_url);
@@ -304,7 +304,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "🔐 Keine gültige Sitzung gefunden. Starte regulären Passwort-Login für {}...",
                 username
             );
-            let pass = password.expect("MATRIX_PASSWORD fehlt in .env, Passwort-Login unmöglich!");
+            let pass = password.expect("MATRIX_BOT_PASSWORD fehlt in .env, Passwort-Login unmöglich!");
 
             client
                 .matrix_auth()

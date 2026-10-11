@@ -4,7 +4,7 @@
 POLARIS INFRASTRUCTURE PIPELINE - BKG BASE IMPORTER
 Hebt die offiziellen Verwaltungsgrenzen (VG25) in die Tabelle 'main_zones'.
 Zeitstempel: Samstag, 12. September 2026
-Lizenz: Public Domain / CC0 (Gemeinfrei)
+Lizenz: MIT-Lizenz (Open Source)
 """
 
 import os
@@ -21,7 +21,7 @@ def main():
     # 1. Dynamische Pfad-Auflösung für die .env-Datei
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
-    env_path = os.path.join(os.path.dirname(project_root), 'services', 'matrix-gateway', '.env')
+    env_path = os.path.join(project_root, '.env')
 
     if not os.path.exists(env_path):
         print(f"❌ Fehler: .env-Datei nicht gefunden unter {env_path}")
@@ -30,6 +30,8 @@ def main():
     load_dotenv(env_path)
     
     db_url = os.getenv("DATABASE_URL")
+    if db_url and "@polaris-db" in db_url:
+        db_url = db_url.replace("@polaris-db", "@127.0.0.1")
     gpkg_path = os.getenv("BKG_GPKG_PATH")
     
     if not db_url or not gpkg_path:
@@ -44,7 +46,8 @@ def main():
 
     # 2. Datenhygiene beim Start via nativem psycopg2-Treiber
     try:
-        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        check_url = os.getenv("DATABASE_URL").replace("@polaris-db", "@127.0.0.1") if os.getenv("DATABASE_URL") else None
+        conn = psycopg2.connect(check_url)
         cursor = conn.cursor()
         
         print("🧹 Bereinige bestehende Tabellenstrukturen im Kaskaden-Verfahren...")

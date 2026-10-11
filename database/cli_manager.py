@@ -6,15 +6,17 @@ import psycopg2.extras  # <-- DIESE ZEILE HINZUFÜGEN!
 from dotenv import load_dotenv
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-env_path = os.path.join(os.path.dirname(script_dir), 'services', 'matrix-gateway', '.env')
+project_root = os.path.dirname(script_dir)
+# 🎯 KORREKTUR: Zeigt direkt auf die zentrale .env im Hauptordner
+env_path = os.path.join(project_root, '.env')
 load_dotenv(dotenv_path=env_path)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    print("❌ FEHLER: DATABASE_URL fehlt in der .env!", file=sys.stderr); sys.exit(1)
-
 def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
+    db_url = os.getenv("DATABASE_URL")
+    # 🎯 ÜBERSETZER: Biegt den Docker-Host für das lokale Skript auf localhost um
+    if db_url and "@polaris-db" in db_url:
+        db_url = db_url.replace("@polaris-db", "@127.0.0.1")
+    return psycopg2.connect(db_url)
 
 def select_bundesland(cur):
     """Schritt 1: Schneidet das BL live aus dem ARS und verknüpft den Namen."""

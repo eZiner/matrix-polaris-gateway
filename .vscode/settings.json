@@ -1,9 +1,10 @@
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/database/.venv/bin/python",
-    "python.analysis.extraPaths": [
-        "${workspaceFolder}/database/.venv/lib/python3.10/site-packages"
-    ],
+    // Erlaubt VS Code, beim Terminal-Start automatisch die jeweils richtige .venv des Bots zu laden
     "python.terminal.activateEnvInCurrentTerminal": true,
+    "python.terminal.executeInFileDir": true,
+    "python.terminal.useEnvFile": true,
+
+    // 📍 DEINE ORIGINALEN SQL-CONN-DATA (Absolut unberührt und sicher!)
     "sqltools.connections": [
         {
             "ssh": "Disabled",
@@ -15,7 +16,5 @@
             "database": "polaris_geo",
             "username": "polaris"
         }
-    ],
-    "python.terminal.executeInFileDir": true,
-    "python.terminal.useEnvFile": true
+    ]
 }

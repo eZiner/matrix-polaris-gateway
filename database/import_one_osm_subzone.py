@@ -26,10 +26,10 @@ def create_robust_session():
     session.mount("http://", adapter)
     return session
 
-# 1. SETUP & ENV-LADEN
+# 🎯 KORREKTUR: Zeigt direkt auf die zentrale .env im Hauptordner
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
-env_path = os.path.join(os.path.dirname(project_root), 'services', 'matrix-gateway', '.env')
+env_path = os.path.join(project_root, '.env')
 load_dotenv(dotenv_path=env_path)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -55,7 +55,11 @@ def process_single_municipality(muni_input, mode):
         return "SUCCESS", "Programm beendet."
 
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        db_url = os.getenv("DATABASE_URL")
+        # 🎯 ÜBERSETZER: Biegt den Docker-Host für das lokale Skript auf localhost um
+        if db_url and "@polaris-db" in db_url:
+            db_url = db_url.replace("@polaris-db", "@127.0.0.1")
+        conn = psycopg2.connect(db_url)
         cur = conn.cursor()
     except Exception as e:
         return "ERROR", f"Datenbank-Verbindungsfehler: {e}"
@@ -248,14 +252,12 @@ def process_single_municipality(muni_input, mode):
 def main():
     # Lädt die Umgebungsvariablen für das SLG-Rack
     load_dotenv()
-    DATABASE_URL = os.getenv("DATABASE_URL")
+    # Verbindungsaufbau zur PostGIS mit Docker-Übersetzer
+    db_url = os.getenv("DATABASE_URL")
+    if db_url and "@polaris-db" in db_url:
+        db_url = db_url.replace("@polaris-db", "@127.0.0.1")
     
-    if not DATABASE_URL:
-        print("❌ FEHLER: DATABASE_URL nicht in der .env gefunden!")
-        return
-
-    # Verbindungsaufbau zur PostGIS
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = psycopg2.connect(db_url)
     cur = conn.cursor()
 
     try:
